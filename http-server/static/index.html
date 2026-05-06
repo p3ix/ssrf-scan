@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SSRF-BOX Dashboard</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <h1>SSRF<span class="accent">-BOX</span></h1>
+      <div class="header-meta">
+        <span id="status-dot" class="dot disconnected"></span>
+        <span id="status-text">Conectando...</span>
+        <span class="separator">|</span>
+        <span id="total-count">0 interacciones</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Auth gate -->
+  <div id="auth-gate">
+    <div class="auth-card">
+      <h2>API Key</h2>
+      <input type="password" id="api-key-input" placeholder="Introduce tu API key" autocomplete="off">
+      <button onclick="login()">Entrar</button>
+      <p id="auth-error" class="error hidden"></p>
+    </div>
+  </div>
+
+  <main id="app" class="hidden">
+    <!-- Stats bar -->
+    <div class="stats-bar">
+      <div class="stat-card" id="stat-dns"><span class="num">0</span><span class="label">DNS</span></div>
+      <div class="stat-card" id="stat-http"><span class="num">0</span><span class="label">HTTP</span></div>
+      <div class="stat-card" id="stat-smtp"><span class="num">0</span><span class="label">SMTP</span></div>
+      <div class="stat-card" id="stat-ldap"><span class="num">0</span><span class="label">LDAP</span></div>
+    </div>
+
+    <div class="layout">
+      <!-- Left: controls + payload generator -->
+      <aside class="sidebar">
+        <section class="panel">
+          <h3>Filtros</h3>
+          <input type="text" id="filter-uuid" placeholder="UUID" oninput="applyFilters()">
+          <select id="filter-type" onchange="applyFilters()">
+            <option value="">Todos los tipos</option>
+            <option value="dns">DNS</option>
+            <option value="http">HTTP</option>
+            <option value="smtp">SMTP</option>
+            <option value="ldap">LDAP</option>
+          </select>
+          <button class="btn-secondary" onclick="clearFilters()">Limpiar filtros</button>
+          <button class="btn-danger" onclick="deleteUUID()">Borrar UUID seleccionado</button>
+        </section>
+
+        <section class="panel">
+          <h3>Generar Payload</h3>
+          <select id="payload-type">
+            <option value="ssrf">OOB Básico</option>
+            <option value="bypass">IP Bypass (127.0.0.1)</option>
+            <option value="rebind">DNS Rebinding</option>
+            <option value="cloud">Cloud Metadata</option>
+            <option value="protocol">Protocolos Alternativos</option>
+            <option value="exfil">Exfiltración DNS</option>
+          </select>
+          <div id="rebind-extra" class="hidden">
+            <input type="text" id="public-ip" placeholder="IP Pública (1.1.1.1)">
+            <input type="text" id="private-ip" placeholder="IP Privada (169.254.169.254)">
+          </div>
+          <div id="bypass-extra" class="hidden">
+            <input type="text" id="bypass-target" placeholder="IP objetivo (127.0.0.1)">
+          </div>
+          <button class="btn-primary" onclick="generatePayload()">Generar</button>
+        </section>
+
+        <section class="panel">
+          <h3>Exportar</h3>
+          <button class="btn-secondary" onclick="exportJSON()">JSON</button>
+          <button class="btn-secondary" onclick="exportCSV()">CSV</button>
+        </section>
+      </aside>
+
+      <!-- Center: interactions feed -->
+      <section class="feed-section">
+        <div class="feed-header">
+          <h3>Interacciones en tiempo real</h3>
+          <label class="toggle-label">
+            <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+          </label>
+        </div>
+        <div id="interactions-feed"></div>
+      </section>
+
+      <!-- Right: payload output + detail panel -->
+      <aside class="detail-panel">
+        <div id="payload-output" class="panel hidden">
+          <h3>Payloads generados <span id="payload-uuid-badge" class="badge"></span></h3>
+          <div id="payload-list"></div>
+        </div>
+
+        <div id="interaction-detail" class="panel hidden">
+          <h3>Detalle <button class="btn-close" onclick="closeDetail()">✕</button></h3>
+          <pre id="detail-content"></pre>
+        </div>
+      </aside>
+    </div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
