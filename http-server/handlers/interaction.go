@@ -75,8 +75,8 @@ func (h *InteractionHandler) broadcastInteraction(i *db.Interaction) {
 	}
 }
 
-// InternalReceive handles POST /internal/interaction sent by the DNS server.
-func InternalReceive(database *db.DB, hub *Hub, internalKey string) gin.HandlerFunc {
+// InternalReceive handles POST /internal/interaction sent by the DNS and SMTP/LDAP servers.
+func InternalReceive(database *db.DB, hub *Hub, notifier *Notifier, internalKey string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.GetHeader("X-Internal-Key") != internalKey {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "forbidden"})
@@ -94,18 +94,21 @@ func InternalReceive(database *db.DB, hub *Hub, internalKey string) gin.HandlerF
 
 		id, err := database.InsertInteraction(&i)
 		if err != nil {
-			log.Printf("[ERROR] InsertInteraction (DNS): %v", err)
+			log.Printf("[ERROR] InsertInteraction (internal): %v", err)
 			c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 		i.ID = id
+		log.Printf("[%s] id=%d uuid=%s from=%s", strings.ToUpper(i.Type), id, i.UUID, i.SourceIP)
 
 		payload := map[string]any{"event": "new_interaction", "interaction": i}
 		if data, err := json.Marshal(payload); err == nil {
 			hub.Broadcast(data)
 		}
+		if notifier != nil {
+			notifier.Notify(&i)
+		}
 
-		// Optional: send Discord/Telegram notification
 		c.JSON(http.StatusCreated, gin.H{"id": id})
 	}
 }

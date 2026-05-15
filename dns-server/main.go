@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base32"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -164,7 +165,9 @@ func (s *DNSServer) parseSubdomain(qname string) (uuid, exfilData string, isRebi
 	return uuid, exfilData, false
 }
 
-// decodeExfilData attempts to decode base64 or hex encoded exfiltrated data.
+// decodeExfilData attempts to decode base64, base32, or hex encoded exfiltrated data.
+// DNS labels are case-insensitive, so base32 (uppercase alphabet) is preferred for DNS exfil
+// since it survives case normalization. base64 is also tried for compatibility.
 func decodeExfilData(raw string) string {
 	// Try URL-safe base64 (no padding)
 	if decoded, err := base64.RawURLEncoding.DecodeString(raw); err == nil && isPrintable(decoded) {
@@ -172,6 +175,10 @@ func decodeExfilData(raw string) string {
 	}
 	// Try standard base64
 	if decoded, err := base64.StdEncoding.DecodeString(raw); err == nil && isPrintable(decoded) {
+		return string(decoded)
+	}
+	// Try base32 (standard, uppercase, no padding — survives DNS case normalization)
+	if decoded, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(strings.ToUpper(raw)); err == nil && isPrintable(decoded) {
 		return string(decoded)
 	}
 	// Try hex

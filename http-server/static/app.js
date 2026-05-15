@@ -5,7 +5,7 @@ let apiKey = localStorage.getItem('ssrfbox_key') || '';
 let ws = null;
 let interactions = [];
 let filteredInteractions = [];
-let stats = { dns: 0, http: 0, smtp: 0, ldap: 0 };
+let stats = { dns: 0, http: 0, smtp: 0, ldap: 0, redis: 0, mysql: 0, postgresql: 0, ftp: 0, elasticsearch: 0, memcached: 0, mongodb: 0 };
 const DOMAIN = window.location.hostname;
 
 // ── Auth ───────────────────────────────────────────────────────────────────
@@ -135,7 +135,7 @@ function showDetail(i) {
     body:         i.body,
     raw_data:     i.raw_data,
   };
-  document.getElementById('detail-content').textContent = JSON.stringify(content, null, 2);
+  document.getElementById('detail-content').innerHTML = jsonHighlight(JSON.stringify(content, null, 2));
 }
 
 function closeDetail() {
@@ -145,7 +145,7 @@ function closeDetail() {
 // ── Stats ──────────────────────────────────────────────────────────────────
 function updateStats(byType, total) {
   stats = { ...stats, ...(byType || {}) };
-  for (const t of ['dns', 'http', 'smtp', 'ldap']) {
+  for (const t of ['dns', 'http', 'smtp', 'ldap', 'redis', 'mysql', 'postgresql', 'ftp', 'elasticsearch']) {
     const el = document.querySelector(`#stat-${t} .num`);
     if (el) el.textContent = stats[t] || 0;
   }
@@ -155,8 +155,9 @@ function updateStats(byType, total) {
 // ── WebSocket ──────────────────────────────────────────────────────────────
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const wsURL = `${proto}://${location.host}/ws?apikey=${encodeURIComponent(apiKey)}`;
-  ws = new WebSocket(wsURL);
+  const wsURL = `${proto}://${location.host}/ws`;
+  // Pass API key via Sec-WebSocket-Protocol (browser WS API doesn't support custom headers)
+  ws = new WebSocket(wsURL, [apiKey]);
 
   ws.onopen = () => {
     document.getElementById('status-dot').className = 'dot connected';
@@ -289,7 +290,10 @@ async function exportCSV() {
   let url = '/api/export?';
   if (uuid) url += 'uuid=' + encodeURIComponent(uuid) + '&';
   if (type) url += 'type=' + encodeURIComponent(type);
-  window.open(url + '&apikey=' + encodeURIComponent(apiKey));
+  // Use apiFetch (auth via header) to avoid exposing the API key in the URL
+  const resp = await apiFetch(url);
+  const blob = await resp.blob();
+  downloadBlob(blob, `ssrf-box-${Date.now()}.csv`);
 }
 
 function downloadBlob(blob, filename) {
@@ -300,6 +304,23 @@ function downloadBlob(blob, filename) {
 }
 
 // ── Utils ──────────────────────────────────────────────────────────────────
+
+// jsonHighlight applies minimal colour-coding to a JSON string using spans.
+// Escapes HTML first so it's safe to set as innerHTML.
+function jsonHighlight(json) {
+  const escaped = json
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return escaped.replace(
+    /("(?:\\.|[^"\\])*"(?:\s*:)?|true|false|null|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g,
+    (token) => {
+      if (token.endsWith(':')) return `<span class="json-key">${token}</span>`;
+      if (token.startsWith('"'))  return `<span class="json-str">${token}</span>`;
+      if (token === 'true' || token === 'false') return `<span class="json-bool">${token}</span>`;
+      if (token === 'null') return `<span class="json-null">${token}</span>`;
+      return `<span class="json-num">${token}</span>`;
+    }
+  );
+}
 function truncate(s, n) {
   if (!s) return '';
   return s.length > n ? s.slice(0, n) + '…' : s;

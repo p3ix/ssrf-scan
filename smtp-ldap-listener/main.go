@@ -1,10 +1,11 @@
 // smtp-ldap-listener: Passive TCP listeners for non-HTTP SSRF detection.
-// Listens on SMTP (25, 587), LDAP (389, 636), FTP (21), and generic ports.
+// Listens on SMTP, LDAP, FTP, Redis, MySQL, PostgreSQL, MongoDB, Memcached, Elasticsearch.
 // Reports all connections to the HTTP server's internal API.
 package main
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,8 +13,51 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 )
+
+// mysqlGreeting is a minimal MySQL 5.7 server greeting (Protocol 10).
+// Payload = 78 bytes → header length field = 0x4e.
+var mysqlGreeting = []byte{
+	// Packet header: payload length = 78 (LE), sequence = 0
+	0x4e, 0x00, 0x00, 0x00,
+	// Protocol version 10
+	0x0a,
+	// Server version "5.7.0-ssrf\0"
+	'5', '.', '7', '.', '0', '-', 's', 's', 'r', 'f', 0x00,
+	// Connection ID = 1 (LE)
+	0x01, 0x00, 0x00, 0x00,
+	// Auth-plugin-data-part-1 (8 bytes)
+	0x3a, 0x27, 0x6e, 0x29, 0x56, 0x67, 0x37, 0x42,
+	// Filler
+	0x00,
+	// Capability flags lower
+	0x0d, 0xa2,
+	// Character set utf8 (0x21)
+	0x21,
+	// Status flags: SERVER_STATUS_AUTOCOMMIT
+	0x02, 0x00,
+	// Capability flags upper
+	0xff, 0xdf,
+	// Length of auth-plugin-data (21)
+	0x15,
+	// Reserved (10 zero bytes)
+	0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+	// Auth-plugin-data-part-2 (13 bytes)
+	0x43, 0x5b, 0x56, 0x39, 0x3a, 0x2e, 0x22, 0x5b, 0x24, 0x4c, 0x3c, 0x21, 0x00,
+	// Auth plugin name "mysql_native_password\0"
+	'm', 'y', 's', 'q', 'l', '_', 'n', 'a', 't', 'i', 'v', 'e', '_',
+	'p', 'a', 's', 's', 'w', 'o', 'r', 'd', 0x00,
+}
+
+// uuidRe matches the 8-hex-char UUID format used by SSRF-BOX payload generator.
+var uuidRe = regexp.MustCompile(`[0-9a-f]{8}`)
+
+func extractUUID(s string) string {
+	return uuidRe.FindString(strings.ToLower(s))
+}
 
 type Interaction struct {
 	UUID        string    `json:"uuid"`
@@ -24,17 +68,22 @@ type Interaction struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
+// ParseFn extracts a correlation UUID and human-readable summary from raw captured bytes.
+type ParseFn func(raw string) (uuid, decoded string)
+
 type PortListener struct {
-	Port           string
-	Protocol       string
-	Banner         string
-	MaxReadBytes   int
+	Port         string
+	Protocol     string
+	Banner       string  // text banner (sent with trailing newline)
+	BannerBytes  []byte  // binary banner (sent as-is); takes precedence over Banner
+	MaxReadBytes int
+	ParseFn      ParseFn // nil → generic fallback
+
 	httpServerURL  string
 	internalAPIKey string
 	httpCli        *http.Client
 }
 
-// ListenAndLog starts a TCP listener, accepts connections, logs them, and sends the banner.
 func (p *PortListener) ListenAndLog() {
 	ln, err := net.Listen("tcp", ":"+p.Port)
 	if err != nil {
@@ -42,7 +91,6 @@ func (p *PortListener) ListenAndLog() {
 		return
 	}
 	log.Printf("[INFO] Listening on %s port %s", p.Protocol, p.Port)
-
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -58,19 +106,24 @@ func (p *PortListener) handleConn(conn net.Conn) {
 
 	remoteAddr := conn.RemoteAddr().String()
 	sourceIP := remoteAddr
-	if idx, _ := lastColon(remoteAddr); idx >= 0 {
+	if idx := strings.LastIndex(remoteAddr, ":"); idx >= 0 {
 		sourceIP = remoteAddr[:idx]
 	}
+	// Strip IPv6 brackets
+	sourceIP = strings.Trim(sourceIP, "[]")
 
 	log.Printf("[%s/%s] Connection from %s", p.Protocol, p.Port, sourceIP)
 
-	// Send protocol banner to keep connection alive long enough to read data
-	if p.Banner != "" {
+	// Send banner
+	if len(p.BannerBytes) > 0 {
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		conn.Write(p.BannerBytes)
+	} else if p.Banner != "" {
 		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 		fmt.Fprintln(conn, p.Banner)
 	}
 
-	// Try to read initial client data (e.g. SMTP EHLO, LDAP bind request)
+	// Read initial client data
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	buf := make([]byte, p.MaxReadBytes)
 	n, _ := io.ReadAtLeast(conn, buf, 1)
@@ -79,12 +132,21 @@ func (p *PortListener) handleConn(conn net.Conn) {
 		rawData = string(buf[:n])
 	}
 
+	uuid := ""
+	decoded := ""
+	if p.ParseFn != nil {
+		uuid, decoded = p.ParseFn(rawData)
+	}
+	if decoded == "" {
+		decoded = fmt.Sprintf("SSRF detected via %s on port %s from %s", p.Protocol, p.Port, sourceIP)
+	}
+
 	interaction := Interaction{
-		UUID:        "",
+		UUID:        uuid,
 		Type:        p.Protocol,
 		SourceIP:    sourceIP,
 		RawData:     fmt.Sprintf("[%s port %s] %s", p.Protocol, p.Port, rawData),
-		DecodedData: fmt.Sprintf("SSRF detected via %s on port %s from %s", p.Protocol, p.Port, sourceIP),
+		DecodedData: decoded,
 		Timestamp:   time.Now(),
 	}
 	p.report(interaction)
@@ -102,7 +164,6 @@ func (p *PortListener) report(i Interaction) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Internal-Key", p.internalAPIKey)
-
 	resp, err := p.httpCli.Do(req)
 	if err != nil {
 		log.Printf("[WARN] Report: %v", err)
@@ -111,13 +172,72 @@ func (p *PortListener) report(i Interaction) {
 	resp.Body.Close()
 }
 
-func lastColon(s string) (int, bool) {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == ':' {
-			return i, true
+// parseSMTP extracts UUID from EHLO/HELO hostname and logs MAIL FROM / RCPT TO.
+func parseSMTP(ssrfDomain string) ParseFn {
+	return func(raw string) (uuid, decoded string) {
+		var parts []string
+		for _, line := range strings.Split(raw, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			upper := strings.ToUpper(line)
+			if strings.HasPrefix(upper, "EHLO ") || strings.HasPrefix(upper, "HELO ") {
+				fields := strings.Fields(line)
+				if len(fields) >= 2 {
+					host := fields[1]
+					// Try to extract UUID from subdomain prefix
+					if ssrfDomain != "" && strings.HasSuffix(strings.ToLower(host), "."+ssrfDomain) {
+						sub := strings.ToLower(host[:len(host)-len(ssrfDomain)-1])
+						uuid = strings.SplitN(sub, ".", 2)[0]
+					} else if u := extractUUID(host); u != "" {
+						uuid = u
+					}
+					parts = append(parts, "EHLO:"+host)
+				}
+			} else if strings.HasPrefix(upper, "MAIL FROM:") || strings.HasPrefix(upper, "RCPT TO:") {
+				if u := extractUUID(line); u != "" && uuid == "" {
+					uuid = u
+				}
+				parts = append(parts, line)
+			}
+		}
+		decoded = strings.Join(parts, " | ")
+		return
+	}
+}
+
+// parseFTP extracts USER and PASS commands.
+func parseFTP(raw string) (uuid, decoded string) {
+	var parts []string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "USER ") || strings.HasPrefix(upper, "PASS ") {
+			if u := extractUUID(line); u != "" && uuid == "" {
+				uuid = u
+			}
+			parts = append(parts, line)
 		}
 	}
-	return -1, false
+	decoded = strings.Join(parts, " | ")
+	return
+}
+
+// parseLDAP hex-dumps the BER-encoded binary bind request.
+func parseLDAP(raw string) (uuid, decoded string) {
+	decoded = "ldap-bind hex: " + hex.EncodeToString([]byte(raw))
+	return "", decoded
+}
+
+// parseGeneric looks for the first 8-hex-char SSRF-BOX UUID token in any text data.
+func parseGeneric(raw string) (uuid, decoded string) {
+	uuid = extractUUID(raw)
+	decoded = strings.TrimSpace(raw)
+	return
 }
 
 func getEnv(key, def string) string {
@@ -130,40 +250,30 @@ func getEnv(key, def string) string {
 func main() {
 	httpServerURL := getEnv("HTTP_SERVER_URL", "http://http-server:8080")
 	internalAPIKey := getEnv("INTERNAL_API_KEY", "changeme-internal")
+	ssrfDomain := getEnv("SSRF_DOMAIN", "")
 
 	httpCli := &http.Client{Timeout: 5 * time.Second}
 
+	smtpParse := parseSMTP(ssrfDomain)
+
+	// HTTP-style banner for Elasticsearch (clients speak HTTP to port 9200)
+	esBanner := "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n" +
+		`{"name":"ssrf-box","cluster_name":"elasticsearch","version":{"number":"7.17.0"},"tagline":"You Know, for Search"}` + "\n"
+
 	listeners := []PortListener{
-		{
-			Port:     "25",
-			Protocol: "smtp",
-			Banner:   "220 mail.ssrf-box.local ESMTP Postfix",
-			MaxReadBytes: 512,
-		},
-		{
-			Port:     "587",
-			Protocol: "smtp",
-			Banner:   "220 mail.ssrf-box.local ESMTP Postfix (submission)",
-			MaxReadBytes: 512,
-		},
-		{
-			Port:     "389",
-			Protocol: "ldap",
-			Banner:   "", // LDAP doesn't send a banner; client sends bind request first
-			MaxReadBytes: 512,
-		},
-		{
-			Port:     "636",
-			Protocol: "ldaps",
-			Banner:   "",
-			MaxReadBytes: 512,
-		},
-		{
-			Port:     "21",
-			Protocol: "ftp",
-			Banner:   "220 FTP Server ready",
-			MaxReadBytes: 256,
-		},
+		// ── Original protocols ────────────────────────────────────────────────
+		{Port: "25", Protocol: "smtp", Banner: "220 mail.ssrf-box.local ESMTP Postfix", MaxReadBytes: 512, ParseFn: smtpParse},
+		{Port: "587", Protocol: "smtp", Banner: "220 mail.ssrf-box.local ESMTP Postfix (submission)", MaxReadBytes: 512, ParseFn: smtpParse},
+		{Port: "389", Protocol: "ldap", Banner: "", MaxReadBytes: 512, ParseFn: parseLDAP},
+		{Port: "636", Protocol: "ldaps", Banner: "", MaxReadBytes: 512, ParseFn: parseLDAP},
+		{Port: "21", Protocol: "ftp", Banner: "220 FTP Server ready", MaxReadBytes: 256, ParseFn: parseFTP},
+		// ── New database / service ports ──────────────────────────────────────
+		{Port: "6379", Protocol: "redis", Banner: "-ERR unknown command 'SSRF'\r\n", MaxReadBytes: 256, ParseFn: parseGeneric},
+		{Port: "3306", Protocol: "mysql", BannerBytes: mysqlGreeting, MaxReadBytes: 256, ParseFn: parseGeneric},
+		{Port: "5432", Protocol: "postgresql", Banner: "", MaxReadBytes: 256, ParseFn: parseGeneric},
+		{Port: "27017", Protocol: "mongodb", Banner: "", MaxReadBytes: 256, ParseFn: parseGeneric},
+		{Port: "11211", Protocol: "memcached", Banner: "", MaxReadBytes: 256, ParseFn: parseGeneric},
+		{Port: "9200", Protocol: "elasticsearch", Banner: esBanner, MaxReadBytes: 512, ParseFn: parseGeneric},
 	}
 
 	for i := range listeners {
@@ -173,8 +283,6 @@ func main() {
 		go listeners[i].ListenAndLog()
 	}
 
-	log.Printf("[INFO] SMTP/LDAP/FTP listeners started | reporting to %s", httpServerURL)
-
-	// Block forever
+	log.Printf("[INFO] Listeners started (%d ports) | reporting to %s", len(listeners), httpServerURL)
 	select {}
 }

@@ -294,3 +294,11 @@ button:hover { opacity: 0.85; }
   .layout { grid-template-columns: 1fr; }
   .stats-bar { flex-wrap: wrap; }
 }
+
+
+/* JSON syntax highlighting in detail panel */
+.json-key  { color: #79c0ff; }
+.json-str  { color: #a5d6ff; }
+.json-num  { color: #f2cc60; }
+.json-bool { color: #ff7b72; }
+.json-null { color: #8b949e; }

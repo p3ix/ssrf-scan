@@ -28,6 +28,8 @@ func (h *MetadataHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.Any("/computeMetadata/v1/*path", h.gcpMetadata)
 	// Azure
 	rg.Any("/metadata/*path", h.azureMetadata)
+	// Alibaba Cloud (ECS metadata service at 100.100.100.200)
+	rg.Any("/2016-01-01/*path", h.alibabaMetadata)
 	// Generic catch-all under /metadata/
 	rg.Any("/*path", h.genericMetadata)
 }
@@ -113,6 +115,15 @@ func (h *MetadataHandler) awsIMDSv2Token(c *gin.Context) {
 
 func (h *MetadataHandler) gcpMetadata(c *gin.Context) {
 	path := c.Param("path")
+	// Real GCP rejects requests without this header (403). We log even the rejected ones.
+	if c.GetHeader("Metadata-Flavor") != "Google" {
+		h.logAndNotify(c, "GCP-NO-HEADER", path)
+		c.JSON(http.StatusForbidden, gin.H{
+			"ssrf-box": "GCP metadata requires 'Metadata-Flavor: Google' header",
+			"hint":     "Add header: Metadata-Flavor: Google",
+		})
+		return
+	}
 	h.logAndNotify(c, "GCP", path)
 
 	switch path {
@@ -138,6 +149,15 @@ func (h *MetadataHandler) gcpMetadata(c *gin.Context) {
 
 func (h *MetadataHandler) azureMetadata(c *gin.Context) {
 	path := c.Param("path")
+	// Real Azure IMDS rejects requests without Metadata: true header (400).
+	if c.GetHeader("Metadata") != "true" {
+		h.logAndNotify(c, "Azure-NO-HEADER", path)
+		c.JSON(http.StatusBadRequest, gin.H{
+			"ssrf-box": "Azure IMDS requires 'Metadata: true' header",
+			"hint":     "Add header: Metadata: true",
+		})
+		return
+	}
 	h.logAndNotify(c, "Azure", path)
 
 	if path == "/identity/oauth2/token" {
@@ -153,6 +173,26 @@ func (h *MetadataHandler) azureMetadata(c *gin.Context) {
 		"note":      "SSRF-BOX: Azure IMDS simulado",
 		"compute":   gin.H{"vmId": "00000000-0000-0000-0000-000000000002", "location": "eastus"},
 		"network":   gin.H{"interface": []gin.H{{"ipv4": gin.H{"ipAddress": []gin.H{{"privateIpAddress": "10.0.0.1"}}}}}},
+	})
+}
+
+// alibabaMetadata simulates Alibaba Cloud ECS metadata (100.100.100.200, path prefix /2016-01-01/).
+func (h *MetadataHandler) alibabaMetadata(c *gin.Context) {
+	path := c.Param("path")
+	h.logAndNotify(c, "Alibaba", path)
+	c.JSON(http.StatusOK, gin.H{
+		"ssrf-box":    "SSRF-BOX: Alibaba Cloud ECS metadata simulado",
+		"path":        path,
+		"instance-id": "i-ssrfbox0000000001",
+		"region-id":   "cn-hangzhou",
+		"role-name":   "ssrf-box-role",
+		"owner-account-id": "123456789012",
+		"security-credentials": gin.H{
+			"AccessKeyId":     "STS.SSRF-BOX-SIMULATED-ALIBABA",
+			"AccessKeySecret": "SSRF-BOX-SIMULATED-SECRET",
+			"SecurityToken":   "SSRF-BOX-SIMULATED-TOKEN",
+			"Expiration":      time.Now().Add(6 * time.Hour).Format(time.RFC3339),
+		},
 	})
 }
 

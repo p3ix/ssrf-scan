@@ -3,6 +3,7 @@ package handlers
 import (
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,7 +11,17 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // allow all origins for self-hosted
+	// Only accept connections from the same host (prevents cross-site WebSocket hijacking).
+	// Non-browser clients (curl, custom tools) send no Origin header and are always allowed.
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true
+		}
+		// Strip scheme from origin and compare to the server host
+		stripped := strings.TrimPrefix(strings.TrimPrefix(origin, "https://"), "http://")
+		return stripped == r.Host
+	},
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
 }
@@ -64,8 +75,14 @@ func (h *Hub) Broadcast(msg []byte) {
 }
 
 // ServeWS upgrades the HTTP connection and starts pumping messages.
+// If the client sent Sec-WebSocket-Protocol (browser WS auth workaround), echoes it back
+// so the browser doesn't close the connection after the upgrade.
 func (h *Hub) ServeWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := upgrader.Upgrade(w, r, nil)
+	var respHeader http.Header
+	if prots := websocket.Subprotocols(r); len(prots) > 0 {
+		respHeader = http.Header{"Sec-WebSocket-Protocol": []string{prots[0]}}
+	}
+	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		log.Printf("[WS] Upgrade error: %v", err)
 		return

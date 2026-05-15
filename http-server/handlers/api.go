@@ -17,13 +17,14 @@ type APIHandler struct {
 	Hub *Hub
 }
 
-// ListInteractions handles GET /api/interactions
+// ListInteractions handles GET /api/interactions?uuid=&type=&limit=&offset=
 func (h *APIHandler) ListInteractions(c *gin.Context) {
 	uuid := c.Query("uuid")
 	itype := c.Query("type")
 	limit, _ := strconv.Atoi(c.Query("limit"))
+	offset, _ := strconv.Atoi(c.Query("offset"))
 
-	interactions, err := h.DB.ListInteractions(uuid, itype, limit)
+	interactions, err := h.DB.ListInteractions(uuid, itype, limit, offset)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -37,7 +38,7 @@ func (h *APIHandler) ListInteractions(c *gin.Context) {
 // GetInteraction handles GET /api/interactions/:uuid
 func (h *APIHandler) GetInteraction(c *gin.Context) {
 	uuid := c.Param("uuid")
-	interactions, err := h.DB.ListInteractions(uuid, "", 0)
+	interactions, err := h.DB.ListInteractions(uuid, "", 0, 0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -64,7 +65,7 @@ func (h *APIHandler) DeleteInteraction(c *gin.Context) {
 func (h *APIHandler) ExportCSV(c *gin.Context) {
 	uuid := c.Query("uuid")
 	itype := c.Query("type")
-	interactions, err := h.DB.ListInteractions(uuid, itype, 10000)
+	interactions, err := h.DB.ListInteractions(uuid, itype, 10000, 0)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -85,12 +86,14 @@ func (h *APIHandler) ExportCSV(c *gin.Context) {
 }
 
 // CreateRebind handles POST /api/rebind
+// Supports count-based (switch_after) and time-based (switch_delay_seconds) modes.
 func (h *APIHandler) CreateRebind(c *gin.Context) {
 	var req struct {
-		UUID        string `json:"uuid" binding:"required"`
-		PublicIP    string `json:"public_ip" binding:"required"`
-		PrivateIP   string `json:"private_ip" binding:"required"`
-		SwitchAfter int    `json:"switch_after"`
+		UUID               string `json:"uuid" binding:"required"`
+		PublicIP           string `json:"public_ip" binding:"required"`
+		PrivateIP          string `json:"private_ip" binding:"required"`
+		SwitchAfter        int    `json:"switch_after"`
+		SwitchDelaySeconds int    `json:"switch_delay_seconds"` // convenience: set switch_at_time = now+delay
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -104,6 +107,10 @@ func (h *APIHandler) CreateRebind(c *gin.Context) {
 		PublicIP:    req.PublicIP,
 		PrivateIP:   req.PrivateIP,
 		SwitchAfter: req.SwitchAfter,
+	}
+	if req.SwitchDelaySeconds > 0 {
+		t := time.Now().Add(time.Duration(req.SwitchDelaySeconds) * time.Second)
+		cfg.SwitchAtTime = &t
 	}
 	if err := h.DB.UpsertRebindConfig(cfg); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -144,25 +151,17 @@ func (h *APIHandler) UpdateRebindCount(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"updated": true})
 }
 
-// Stats handles GET /api/stats
+// Stats handles GET /api/stats — uses SQL aggregation, never loads rows into memory.
 func (h *APIHandler) Stats(c *gin.Context) {
-	interactions, err := h.DB.ListInteractions("", "", 10000)
+	stats, err := h.DB.GetStats()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	counts := map[string]int{"dns": 0, "http": 0, "smtp": 0, "ldap": 0}
-	uuids := map[string]struct{}{}
-	for _, i := range interactions {
-		counts[i.Type]++
-		if i.UUID != "" {
-			uuids[i.UUID] = struct{}{}
-		}
-	}
 	c.JSON(http.StatusOK, gin.H{
-		"total":        len(interactions),
-		"by_type":      counts,
-		"unique_uuids": len(uuids),
+		"total":        stats.Total,
+		"by_type":      stats.ByType,
+		"unique_uuids": stats.UniqueUUIDs,
 	})
 }
 

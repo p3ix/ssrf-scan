@@ -36,6 +36,11 @@
       <div class="stat-card" id="stat-http"><span class="num">0</span><span class="label">HTTP</span></div>
       <div class="stat-card" id="stat-smtp"><span class="num">0</span><span class="label">SMTP</span></div>
       <div class="stat-card" id="stat-ldap"><span class="num">0</span><span class="label">LDAP</span></div>
+      <div class="stat-card" id="stat-redis"><span class="num">0</span><span class="label">Redis</span></div>
+      <div class="stat-card" id="stat-mysql"><span class="num">0</span><span class="label">MySQL</span></div>
+      <div class="stat-card" id="stat-postgresql"><span class="num">0</span><span class="label">PgSQL</span></div>
+      <div class="stat-card" id="stat-ftp"><span class="num">0</span><span class="label">FTP</span></div>
+      <div class="stat-card" id="stat-elasticsearch"><span class="num">0</span><span class="label">ES</span></div>
     </div>
 
     <div class="layout">
@@ -50,6 +55,13 @@
             <option value="http">HTTP</option>
             <option value="smtp">SMTP</option>
             <option value="ldap">LDAP</option>
+            <option value="redis">Redis</option>
+            <option value="mysql">MySQL</option>
+            <option value="postgresql">PostgreSQL</option>
+            <option value="ftp">FTP</option>
+            <option value="mongodb">MongoDB</option>
+            <option value="memcached">Memcached</option>
+            <option value="elasticsearch">Elasticsearch</option>
           </select>
           <button class="btn-secondary" onclick="clearFilters()">Limpiar filtros</button>
           <button class="btn-danger" onclick="deleteUUID()">Borrar UUID seleccionado</button>
@@ -62,6 +74,8 @@
             <option value="bypass">IP Bypass (127.0.0.1)</option>
             <option value="rebind">DNS Rebinding</option>
             <option value="cloud">Cloud Metadata</option>
+            <option value="headers">Header Injection</option>
+            <option value="imdsv2">AWS IMDSv2 (2-step)</option>
             <option value="protocol">Protocolos Alternativos</option>
             <option value="exfil">Exfiltración DNS</option>
           </select>

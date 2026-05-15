@@ -15,7 +15,10 @@ import (
 func main() {
 	dbPath := getEnv("DB_PATH", "/data/ssrf-box.db")
 	domain := getEnv("SSRF_DOMAIN", "oob.example.com")
-	apiKey := getEnv("API_KEY", "changeme-api-key")
+	apiKey := os.Getenv("API_KEY")
+	if apiKey == "" {
+		log.Fatal("[FATAL] API_KEY environment variable is required — set a strong random key in .env")
+	}
 	internalKey := getEnv("INTERNAL_API_KEY", "changeme-internal")
 	tlsCert := getEnv("TLS_CERT_PATH", "")
 	tlsKey := getEnv("TLS_KEY_PATH", "")
@@ -68,9 +71,9 @@ func main() {
 	api.StaticFile("/", "/app/static/index.html")
 	api.StaticFile("/dashboard", "/app/static/index.html")
 
-	// WebSocket (auth via query param for browser compatibility)
+	// WebSocket (auth via Sec-WebSocket-Protocol for browser compatibility — JS WS API has no custom headers)
 	api.GET("/ws", func(c *gin.Context) {
-		if !isAuthorized(c, database, apiKey) {
+		if !isAuthorizedWS(c, database, apiKey) {
 			c.AbortWithStatus(http.StatusForbidden)
 			return
 		}
@@ -80,7 +83,7 @@ func main() {
 	// Internal endpoints (called by DNS/SMTP services, no admin auth but internal key)
 	internal := api.Group("/internal")
 	{
-		internal.POST("/interaction", handlers.InternalReceive(database, hub, internalKey))
+		internal.POST("/interaction", handlers.InternalReceive(database, hub, notifier, internalKey))
 		apiHandler := &handlers.APIHandler{DB: database, Hub: hub}
 		internal.GET("/rebind/:uuid", apiHandler.GetRebind)
 		internal.PATCH("/rebind/:uuid/count", apiHandler.UpdateRebindCount)
@@ -147,12 +150,24 @@ func authMiddleware(database *db.DB, fallbackKey string) gin.HandlerFunc {
 func isAuthorized(c *gin.Context, database *db.DB, fallback string) bool {
 	key := c.GetHeader("X-API-Key")
 	if key == "" {
-		key = c.Query("apikey")
+		return false
+	}
+	if key == fallback {
+		return true
+	}
+	return database.ValidateAPIKey(key)
+}
+
+// isAuthorizedWS also accepts the API key via Sec-WebSocket-Protocol,
+// which is the standard workaround for browser WebSocket auth (JS WS API has no custom headers).
+func isAuthorizedWS(c *gin.Context, database *db.DB, fallback string) bool {
+	key := c.GetHeader("X-API-Key")
+	if key == "" {
+		key = c.GetHeader("Sec-WebSocket-Protocol")
 	}
 	if key == "" {
 		return false
 	}
-	// Fast path: check env-configured key first
 	if key == fallback {
 		return true
 	}

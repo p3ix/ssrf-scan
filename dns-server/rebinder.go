@@ -11,11 +11,12 @@ import (
 
 // RebindConfig holds the state for a single DNS rebinding session.
 type RebindConfig struct {
-	UUID         string `json:"uuid"`
-	PublicIP     string `json:"public_ip"`
-	PrivateIP    string `json:"private_ip"`
-	RequestCount int    `json:"request_count"`
-	SwitchAfter  int    `json:"switch_after"` // Switch to private IP after N requests
+	UUID         string     `json:"uuid"`
+	PublicIP     string     `json:"public_ip"`
+	PrivateIP    string     `json:"private_ip"`
+	RequestCount int        `json:"request_count"`
+	SwitchAfter  int        `json:"switch_after"`   // count-based: switch to PrivateIP after N requests
+	SwitchAtTime *time.Time `json:"switch_at_time"` // time-based: switch after this absolute time
 }
 
 // Rebinder manages DNS rebinding state in memory and persists it via the HTTP server API.
@@ -54,6 +55,17 @@ func (r *Rebinder) GetIP(uuid, publicIPFallback string) string {
 		r.cache[uuid] = cfg
 	}
 
+	// Time-based mode takes priority over count-based
+	if cfg.SwitchAtTime != nil && !cfg.SwitchAtTime.IsZero() {
+		if time.Now().After(*cfg.SwitchAtTime) {
+			log.Printf("[REBIND] uuid=%s → PrivateIP=%s (time-based, switched at %s)", uuid, cfg.PrivateIP, cfg.SwitchAtTime.Format(time.RFC3339))
+			return cfg.PrivateIP
+		}
+		log.Printf("[REBIND] uuid=%s → PublicIP=%s (time-based, switches at %s)", uuid, cfg.PublicIP, cfg.SwitchAtTime.Format(time.RFC3339))
+		return cfg.PublicIP
+	}
+
+	// Count-based mode
 	cfg.RequestCount++
 	go r.persistCount(uuid, cfg.RequestCount)
 

@@ -48,6 +48,7 @@ services:
       DISCORD_WEBHOOK:   ${DISCORD_WEBHOOK:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID:  ${TELEGRAM_CHAT_ID:-}
+      SLACK_WEBHOOK:     ${SLACK_WEBHOOK:-}
     volumes:
       - db-data:/data
       - tls-certs:/certs:ro
@@ -56,7 +57,7 @@ services:
       - ssrf-net
     logging: *logging
 
-  # ── SMTP / LDAP / FTP Listener ────────────────────────────────────────────
+  # ── SMTP / LDAP / FTP / DB Listener ──────────────────────────────────────
   smtp-ldap:
     build:
       context: ./smtp-ldap-listener
@@ -68,9 +69,16 @@ services:
       - "389:389"
       - "587:587"
       - "636:636"
+      - "3306:3306"
+      - "5432:5432"
+      - "6379:6379"
+      - "9200:9200"
+      - "11211:11211"
+      - "27017:27017"
     environment:
       HTTP_SERVER_URL:   http://http-server:8080
       INTERNAL_API_KEY:  ${INTERNAL_API_KEY}
+      SSRF_DOMAIN:       ${SSRF_DOMAIN}
     restart: unless-stopped
     networks:
       - ssrf-net
