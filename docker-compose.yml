@@ -27,7 +27,7 @@ services:
         max-size: "10m"
         max-file: "5"
 
-  # ── HTTP/HTTPS Server (ports 80, 443, 8080) ───────────────────────────────
+  # ── HTTP/HTTPS Server (ports 80, 443, 8080, 3000, 8443, 8888) ────────────
   http-server:
     build:
       context: ./http-server
@@ -37,6 +37,9 @@ services:
       - "80:80"
       - "443:443"
       - "8080:8080"
+      - "3000:3000"    # extra HTTP SSRF listener
+      - "8443:8443"    # extra HTTP SSRF listener (plain HTTP, not TLS)
+      - "8888:8888"    # extra HTTP SSRF listener
     environment:
       SSRF_DOMAIN:       ${SSRF_DOMAIN}
       VPS_IP:            ${VPS_IP}
@@ -45,6 +48,8 @@ services:
       DB_PATH:           /data/ssrf-box.db
       TLS_CERT_PATH:     ${TLS_CERT_PATH:-}
       TLS_KEY_PATH:      ${TLS_KEY_PATH:-}
+      AUTO_TLS_DOMAIN:   ${AUTO_TLS_DOMAIN:-}
+      CERT_CACHE_DIR:    /certs
       DISCORD_WEBHOOK:   ${DISCORD_WEBHOOK:-}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID:  ${TELEGRAM_CHAT_ID:-}
@@ -75,6 +80,7 @@ services:
       - "9200:9200"
       - "11211:11211"
       - "27017:27017"
+      - "445:445"     # SMB/NTLM — captura hashes NTLMv2 en entornos Windows
     environment:
       HTTP_SERVER_URL:   http://http-server:8080
       INTERNAL_API_KEY:  ${INTERNAL_API_KEY}

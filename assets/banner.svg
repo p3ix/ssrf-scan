@@ -1,0 +1,175 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 300" width="1200" height="300">
+  <defs>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="0.8" fill="#21262d"/>
+    </pattern>
+    <linearGradient id="accent-fade" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#58a6ff" stop-opacity="0.8"/>
+      <stop offset="100%" stop-color="#58a6ff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="right-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d1117"/>
+      <stop offset="100%" stop-color="#0d1520"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Base background -->
+  <rect width="1200" height="300" fill="#0d1117" rx="8"/>
+
+  <!-- Dot grid overlay -->
+  <rect width="1200" height="300" fill="url(#dots)" rx="8" opacity="0.6"/>
+
+  <!-- Right panel gradient -->
+  <rect x="730" y="0" width="470" height="300" fill="url(#right-glow)" rx="0" opacity="0.5"/>
+
+  <!-- Outer border -->
+  <rect x="0.5" y="0.5" width="1199" height="299" fill="none" stroke="#21262d" stroke-width="1" rx="8"/>
+
+  <!-- Title bar -->
+  <rect width="1200" height="44" fill="#161b22" rx="8"/>
+  <rect y="22" width="1200" height="22" fill="#161b22"/>
+  <line x1="0" y1="44" x2="1200" y2="44" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Window dots -->
+  <circle cx="22" cy="22" r="6" fill="#f85149" opacity="0.95"/>
+  <circle cx="44" cy="22" r="6" fill="#d29922" opacity="0.95"/>
+  <circle cx="66" cy="22" r="6" fill="#3fb950" opacity="0.95"/>
+
+  <!-- Title bar text -->
+  <text x="600" y="27" text-anchor="middle" dominant-baseline="middle"
+        font-family="'Courier New', Courier, monospace" font-size="12" fill="#484f58">
+    ssrf-box — ~/dashboard — zsh
+  </text>
+
+  <!-- Left accent bar -->
+  <rect x="0" y="44" width="3" height="256" fill="url(#accent-fade)"/>
+
+  <!-- === LEFT SECTION === -->
+
+  <!-- Main title: SSRF -->
+  <text x="62" y="178"
+        font-family="'Courier New', Courier, monospace"
+        font-size="96" font-weight="bold"
+        fill="#58a6ff" letter-spacing="-2">SSRF</text>
+
+  <!-- Center separator dot (dimmed) -->
+  <text x="297" y="178"
+        font-family="'Courier New', Courier, monospace"
+        font-size="96" font-weight="bold"
+        fill="#30363d">·</text>
+
+  <!-- Main title: BOX -->
+  <text x="355" y="178"
+        font-family="'Courier New', Courier, monospace"
+        font-size="96" font-weight="bold"
+        fill="#e6edf3" letter-spacing="-2">BOX</text>
+
+  <!-- Tagline -->
+  <text x="62" y="211"
+        font-family="'Courier New', Courier, monospace"
+        font-size="14" fill="#7d8590">
+    Self-hosted SSRF detection &amp; exploitation — Bug Bounty alternative to Burp Collaborator
+  </text>
+
+  <!-- Protocol badges -->
+  <rect x="62"  y="232" width="42" height="22" rx="3" fill="#1a3a5c"/>
+  <text x="83"  y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#58a6ff">DNS</text>
+
+  <rect x="112" y="232" width="48" height="22" rx="3" fill="#1a3a2a"/>
+  <text x="136" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#3fb950">HTTP</text>
+
+  <rect x="168" y="232" width="50" height="22" rx="3" fill="#3a2a1a"/>
+  <text x="193" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#ffa657">SMTP</text>
+
+  <rect x="226" y="232" width="48" height="22" rx="3" fill="#2a1a3a"/>
+  <text x="250" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#bc8cff">LDAP</text>
+
+  <rect x="282" y="232" width="50" height="22" rx="3" fill="#2a1a1a"/>
+  <text x="307" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#f85149">Redis</text>
+
+  <rect x="340" y="232" width="54" height="22" rx="3" fill="#1a2a1a"/>
+  <text x="367" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#3fb950">MySQL</text>
+
+  <rect x="402" y="232" width="52" height="22" rx="3" fill="#1a2a3a"/>
+  <text x="428" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#58a6ff">PgSQL</text>
+
+  <rect x="462" y="232" width="38" height="22" rx="3" fill="#1a1a2a"/>
+  <text x="481" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#8b949e">FTP</text>
+
+  <rect x="508" y="232" width="42" height="22" rx="3" fill="#2a0a0a"/>
+  <text x="529" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" font-weight="bold" fill="#f85149">SMB</text>
+
+  <rect x="558" y="232" width="28" height="22" rx="3" fill="#1a1a1a"/>
+  <text x="572" y="247" text-anchor="middle" font-family="'Courier New', Courier, monospace" font-size="11" fill="#484f58">···</text>
+
+  <!-- Version badge bottom-left -->
+  <text x="62" y="280"
+        font-family="'Courier New', Courier, monospace"
+        font-size="11" fill="#484f58">v1.0 · Go + SQLite · Docker Compose · MIT</text>
+
+  <!-- === DIVIDER === -->
+  <line x1="730" y1="56" x2="730" y2="286" stroke="#21262d" stroke-width="1"/>
+
+  <!-- === RIGHT SECTION: terminal output === -->
+
+  <!-- Prompt line -->
+  <text x="755" y="76"
+        font-family="'Courier New', Courier, monospace" font-size="11" fill="#484f58">
+    $ docker compose up -d   # 3 containers, 19 ports
+  </text>
+
+  <!-- Port lines -->
+  <!-- :53 DNS -->
+  <text x="755" y="102" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="102" font-family="'Courier New', Courier, monospace" font-size="12" fill="#58a6ff">:53  </text>
+  <text x="822" y="102" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">DNS · rebinding (TTL=1) · base64/hex exfil</text>
+
+  <!-- :80/:443 HTTP -->
+  <text x="755" y="120" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="120" font-family="'Courier New', Courier, monospace" font-size="12" fill="#58a6ff">:80  </text>
+  <text x="822" y="120" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">HTTP catch-all · ACME challenge · 50 req/min RL</text>
+
+  <!-- :443 -->
+  <text x="755" y="138" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="138" font-family="'Courier New', Courier, monospace" font-size="12" fill="#58a6ff">:443 </text>
+  <text x="822" y="138" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">HTTPS · auto-TLS via Let's Encrypt</text>
+
+  <!-- :25 SMTP -->
+  <text x="755" y="156" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="156" font-family="'Courier New', Courier, monospace" font-size="12" fill="#ffa657">:25  </text>
+  <text x="822" y="156" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">SMTP · :587 SMTPS · :389 LDAP · :636 LDAPS</text>
+
+  <!-- :6379 Redis -->
+  <text x="755" y="174" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="174" font-family="'Courier New', Courier, monospace" font-size="12" fill="#f85149">:6379</text>
+  <text x="822" y="174" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">Redis · :3306 MySQL · :5432 PgSQL · :9200 ES</text>
+
+  <!-- :445 SMB -->
+  <text x="755" y="192" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="192" font-family="'Courier New', Courier, monospace" font-size="12" fill="#f85149">:445 </text>
+  <text x="822" y="192" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">SMB · NTLMv2 hash capture</text>
+
+  <!-- :8080 Dashboard -->
+  <text x="755" y="210" font-family="'Courier New', Courier, monospace" font-size="12" fill="#3fb950">✓</text>
+  <text x="772" y="210" font-family="'Courier New', Courier, monospace" font-size="12" fill="#58a6ff">:8080</text>
+  <text x="822" y="210" font-family="'Courier New', Courier, monospace" font-size="12" fill="#7d8590">Dashboard · REST API · WebSocket live feed</text>
+
+  <!-- Separator -->
+  <line x1="755" y1="220" x2="1170" y2="220" stroke="#21262d" stroke-width="1"/>
+
+  <!-- Status line -->
+  <text x="755" y="238"
+        font-family="'Courier New', Courier, monospace" font-size="11" fill="#484f58">
+    Sessions · Gopher builder · Timeline · Self-test · Notifications
+  </text>
+
+  <!-- Glow circle decoration top-right -->
+  <circle cx="1140" cy="80" r="55" fill="#58a6ff" opacity="0.03"/>
+  <circle cx="1140" cy="80" r="35" fill="#58a6ff" opacity="0.04"/>
+
+  <!-- Bottom right label -->
+  <text x="1170" y="280" text-anchor="end"
+        font-family="'Courier New', Courier, monospace" font-size="11" fill="#30363d">
+    github.com/you/ssrf-box
+  </text>
+</svg>

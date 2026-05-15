@@ -5,11 +5,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/ssrf-box/http-server/db"
 	"github.com/ssrf-box/http-server/handlers"
+	"golang.org/x/crypto/acme/autocert"
 )
 
 func main() {
@@ -22,6 +24,7 @@ func main() {
 	internalKey := getEnv("INTERNAL_API_KEY", "changeme-internal")
 	tlsCert := getEnv("TLS_CERT_PATH", "")
 	tlsKey := getEnv("TLS_KEY_PATH", "")
+	autoTLSDomain := os.Getenv("AUTO_TLS_DOMAIN")
 
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -45,19 +48,16 @@ func main() {
 	public := gin.New()
 	public.Use(gin.Recovery())
 	public.Use(requestLogger())
+	public.Use(rateLimitMiddleware(newIPRateLimiter(), 50, time.Minute))
 
-	// Health check (no auth)
 	public.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
-	// Cloud metadata simulation (accessible without auth so SSRF targets can hit it)
 	metaHandler := &handlers.MetadataHandler{DB: database, Hub: hub}
 	metaGroup := public.Group("/metadata")
 	metaHandler.RegisterRoutes(metaGroup)
-	// Also simulate direct 169.254.169.254 paths
 	public.Any("/latest/*path", metaHandler.Handle169)
 	public.Any("/computeMetadata/*path", metaHandler.Handle169)
 
-	// Catch-all SSRF interaction logger
 	ihHandler := &handlers.InteractionHandler{DB: database, Hub: hub, Notifier: notifier}
 	public.NoRoute(ihHandler.Handle)
 
@@ -66,12 +66,10 @@ func main() {
 	api.Use(gin.Recovery())
 	api.Use(requestLogger())
 
-	// Serve static dashboard
 	api.Static("/static", "/app/static")
 	api.StaticFile("/", "/app/static/index.html")
 	api.StaticFile("/dashboard", "/app/static/index.html")
 
-	// WebSocket (auth via Sec-WebSocket-Protocol for browser compatibility — JS WS API has no custom headers)
 	api.GET("/ws", func(c *gin.Context) {
 		if !isAuthorizedWS(c, database, apiKey) {
 			c.AbortWithStatus(http.StatusForbidden)
@@ -80,7 +78,6 @@ func main() {
 		hub.ServeWS(c.Writer, c.Request)
 	})
 
-	// Internal endpoints (called by DNS/SMTP services, no admin auth but internal key)
 	internal := api.Group("/internal")
 	{
 		internal.POST("/interaction", handlers.InternalReceive(database, hub, notifier, internalKey))
@@ -89,7 +86,6 @@ func main() {
 		internal.PATCH("/rebind/:uuid/count", apiHandler.UpdateRebindCount)
 	}
 
-	// Public REST API (admin auth required)
 	apiGroup := api.Group("/api", authMiddleware(database, apiKey))
 	{
 		apiHandler := &handlers.APIHandler{DB: database, Hub: hub}
@@ -101,37 +97,93 @@ func main() {
 		apiGroup.GET("/stats", apiHandler.Stats)
 		apiGroup.POST("/generate", apiHandler.GeneratePayload)
 		apiGroup.GET("/payloads", apiHandler.QuickPayloads(domain))
+		apiGroup.GET("/search", apiHandler.Search)
+		apiGroup.GET("/payload-history", apiHandler.ListPayloadHistory)
+		apiGroup.DELETE("/payload-history/:id", apiHandler.DeletePayloadHistory)
+		apiGroup.GET("/check/:uuid", apiHandler.CheckUUID)
+		apiGroup.POST("/selftest", apiHandler.SelfTest)
+
+		sessionHandler := &handlers.SessionHandler{DB: database}
+		apiGroup.POST("/sessions", sessionHandler.Create)
+		apiGroup.GET("/sessions", sessionHandler.List)
+		apiGroup.GET("/sessions/:uuid", sessionHandler.Get)
+		apiGroup.PATCH("/sessions/:uuid", sessionHandler.Update)
+		apiGroup.DELETE("/sessions/:uuid", sessionHandler.Delete)
+		apiGroup.PATCH("/sessions/:uuid/status", sessionHandler.PatchStatus)
 	}
 
-	// ── Start both servers ─────────────────────────────────────────────────
-	errc := make(chan error, 3)
+	// ── Start servers ──────────────────────────────────────────────────────
+	// errc is sized for critical servers only (admin + public receiver).
+	// Extra ports are best-effort: failure is logged but doesn't stop the process.
+	errc := make(chan error, 2)
 
-	// Admin API on 8080
 	go func() {
-		log.Printf("[INFO] Admin API listening on :8080")
+		log.Printf("[INFO] Admin API on :8080")
 		errc <- api.Run(":8080")
 	}()
 
-	// Public receiver on 80
-	go func() {
-		log.Printf("[INFO] Interaction receiver listening on :80")
-		errc <- public.Run(":80")
-	}()
-
-	// HTTPS on 443 (if certs configured)
-	if tlsCert != "" && tlsKey != "" {
+	// ── Public receiver: HTTP-01 ACME / manual TLS / plain HTTP ───────────
+	switch {
+	case autoTLSDomain != "":
+		// Let's Encrypt via HTTP-01 challenge.
+		// NOTE: issues a cert for the exact domain only (not wildcard subdomains).
+		// Subdomain payloads still generate DNS callbacks; path-based HTTPS payloads work fully.
+		certDir := getEnv("CERT_CACHE_DIR", "/certs")
+		m := &autocert.Manager{
+			Cache:      autocert.DirCache(certDir),
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(autoTLSDomain),
+		}
+		// Port 80: SSRF receiver + ACME challenge handler (/.well-known/acme-challenge/)
 		go func() {
-			log.Printf("[INFO] HTTPS receiver listening on :443")
+			log.Printf("[INFO] HTTP receiver + ACME challenge on :80 (domain=%s)", autoTLSDomain)
+			srv := &http.Server{Addr: ":80", Handler: m.HTTPHandler(public), ReadHeaderTimeout: 10 * time.Second}
+			errc <- srv.ListenAndServe()
+		}()
+		// Port 443: auto-TLS
+		go func() {
+			log.Printf("[INFO] HTTPS receiver (auto-TLS) on :443 (domain=%s)", autoTLSDomain)
 			srv := &http.Server{
-				Addr:    ":443",
-				Handler: public,
-				TLSConfig: &tls.Config{
-					MinVersion: tls.VersionTLS12,
-				},
+				Addr: ":443", Handler: public,
+				TLSConfig: m.TLSConfig(), ReadHeaderTimeout: 10 * time.Second,
+			}
+			errc <- srv.ListenAndServeTLS("", "")
+		}()
+
+	case tlsCert != "" && tlsKey != "":
+		// Manual certificate paths
+		go func() {
+			log.Printf("[INFO] HTTP receiver on :80")
+			errc <- public.Run(":80")
+		}()
+		go func() {
+			log.Printf("[INFO] HTTPS receiver (manual cert) on :443")
+			srv := &http.Server{
+				Addr: ":443", Handler: public,
+				TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 				ReadHeaderTimeout: 10 * time.Second,
 			}
 			errc <- srv.ListenAndServeTLS(tlsCert, tlsKey)
 		}()
+
+	default:
+		go func() {
+			log.Printf("[INFO] HTTP receiver on :80")
+			errc <- public.Run(":80")
+		}()
+	}
+
+	// ── Extra HTTP SSRF listener ports (best-effort) ───────────────────────
+	// These use the same interaction handler as port 80.
+	// Port 8080 is already the admin API — skipped intentionally.
+	for _, port := range []string{"3000", "8443", "8888"} {
+		go func(p string) {
+			log.Printf("[INFO] Extra HTTP listener on :%s", p)
+			srv := &http.Server{Addr: ":" + p, Handler: public, ReadHeaderTimeout: 10 * time.Second}
+			if err := srv.ListenAndServe(); err != nil {
+				log.Printf("[WARN] Extra HTTP listener :%s stopped: %v", p, err)
+			}
+		}(port)
 	}
 
 	log.Fatalf("[FATAL] Server stopped: %v", <-errc)
@@ -158,8 +210,6 @@ func isAuthorized(c *gin.Context, database *db.DB, fallback string) bool {
 	return database.ValidateAPIKey(key)
 }
 
-// isAuthorizedWS also accepts the API key via Sec-WebSocket-Protocol,
-// which is the standard workaround for browser WebSocket auth (JS WS API has no custom headers).
 func isAuthorizedWS(c *gin.Context, database *db.DB, fallback string) bool {
 	key := c.GetHeader("X-API-Key")
 	if key == "" {
@@ -189,4 +239,57 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// ── Per-IP fixed-window rate limiter ──────────────────────────────────────
+
+type ipRateLimiter struct {
+	mu      sync.Mutex
+	windows map[string]*rlWindow
+}
+
+type rlWindow struct {
+	count   int
+	resetAt time.Time
+}
+
+func newIPRateLimiter() *ipRateLimiter {
+	rl := &ipRateLimiter{windows: make(map[string]*rlWindow)}
+	go func() {
+		for range time.Tick(time.Minute) {
+			rl.mu.Lock()
+			now := time.Now()
+			for ip, w := range rl.windows {
+				if now.After(w.resetAt) {
+					delete(rl.windows, ip)
+				}
+			}
+			rl.mu.Unlock()
+		}
+	}()
+	return rl
+}
+
+func (rl *ipRateLimiter) allow(ip string, maxReqs int, window time.Duration) bool {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	now := time.Now()
+	w, ok := rl.windows[ip]
+	if !ok || now.After(w.resetAt) {
+		rl.windows[ip] = &rlWindow{count: 1, resetAt: now.Add(window)}
+		return true
+	}
+	w.count++
+	return w.count <= maxReqs
+}
+
+func rateLimitMiddleware(rl *ipRateLimiter, maxReqs int, window time.Duration) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if !rl.allow(c.ClientIP(), maxReqs, window) {
+			c.Header("Retry-After", "60")
+			c.AbortWithStatus(http.StatusTooManyRequests)
+			return
+		}
+		c.Next()
+	}
 }

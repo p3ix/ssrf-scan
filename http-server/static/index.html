@@ -15,6 +15,7 @@
         <span id="status-text">Conectando...</span>
         <span class="separator">|</span>
         <span id="total-count">0 interacciones</span>
+        <button id="selftest-btn" class="btn-secondary btn-xs hidden" onclick="selfTest()">⚡ Self-test</button>
       </div>
     </div>
   </header>
@@ -41,13 +42,33 @@
       <div class="stat-card" id="stat-postgresql"><span class="num">0</span><span class="label">PgSQL</span></div>
       <div class="stat-card" id="stat-ftp"><span class="num">0</span><span class="label">FTP</span></div>
       <div class="stat-card" id="stat-elasticsearch"><span class="num">0</span><span class="label">ES</span></div>
+      <div class="stat-card" id="stat-smb"><span class="num">0</span><span class="label">SMB</span></div>
     </div>
 
     <div class="layout">
       <!-- Left: controls + payload generator -->
       <aside class="sidebar">
+
+        <!-- ── Nueva Sesión ──────────────────────────────────────────────── -->
+        <section class="panel">
+          <h3>Nueva Sesión</h3>
+          <input type="text" id="s-program" placeholder="Programa (ej: shopify / h1)">
+          <input type="text" id="s-parameter" placeholder="Parámetro (ej: webhook_url)">
+          <input type="text" id="s-endpoint" placeholder="Endpoint (ej: POST /api/hooks)">
+          <textarea id="s-notes" placeholder="Notas..." rows="2"></textarea>
+          <button class="btn-primary btn-full" onclick="createSession()">Crear Sesión + Payloads</button>
+        </section>
+
+        <!-- ── Sesiones activas ─────────────────────────────────────────── -->
+        <section class="panel">
+          <h3>Sesiones <span id="sessions-count" class="badge">0</span></h3>
+          <div id="sessions-list"><span class="muted-hint">Sin sesiones activas</span></div>
+        </section>
+
+        <!-- ── Filtros ──────────────────────────────────────────────────── -->
         <section class="panel">
           <h3>Filtros</h3>
+          <input type="text" id="filter-program" placeholder="Programa" oninput="applyFilters()">
           <input type="text" id="filter-uuid" placeholder="UUID" oninput="applyFilters()">
           <select id="filter-type" onchange="applyFilters()">
             <option value="">Todos los tipos</option>
@@ -59,6 +80,7 @@
             <option value="mysql">MySQL</option>
             <option value="postgresql">PostgreSQL</option>
             <option value="ftp">FTP</option>
+            <option value="smb">SMB</option>
             <option value="mongodb">MongoDB</option>
             <option value="memcached">Memcached</option>
             <option value="elasticsearch">Elasticsearch</option>
@@ -67,6 +89,7 @@
           <button class="btn-danger" onclick="deleteUUID()">Borrar UUID seleccionado</button>
         </section>
 
+        <!-- ── Generar Payload ─────────────────────────────────────────── -->
         <section class="panel">
           <h3>Generar Payload</h3>
           <select id="payload-type">
@@ -86,9 +109,75 @@
           <div id="bypass-extra" class="hidden">
             <input type="text" id="bypass-target" placeholder="IP objetivo (127.0.0.1)">
           </div>
-          <button class="btn-primary" onclick="generatePayload()">Generar</button>
+          <button class="btn-primary btn-full" onclick="generatePayload()">Generar</button>
         </section>
 
+        <!-- ── Gopher Builder ─────────────────────────────────────────────── -->
+        <section class="panel">
+          <h3>Gopher Builder</h3>
+          <div class="g-row">
+            <input type="text" id="g-host" placeholder="127.0.0.1">
+            <input type="text" id="g-port" placeholder="6379">
+          </div>
+          <select id="g-proto" onchange="gopherProtoChange()">
+            <option value="redis">Redis</option>
+            <option value="http">HTTP interno</option>
+            <option value="smtp">SMTP</option>
+            <option value="custom">Raw / Custom</option>
+          </select>
+
+          <!-- Redis template -->
+          <div id="g-redis" class="g-tpl">
+            <select id="g-redis-tpl" onchange="gopherRedisChange()">
+              <option value="flushall">FLUSHALL</option>
+              <option value="set">SET key value</option>
+              <option value="webshell">Webshell (CONFIG+SET+BGSAVE)</option>
+              <option value="slaveof">SLAVEOF (exfiltración)</option>
+              <option value="custom">RESP custom</option>
+            </select>
+            <div id="g-redis-fields"></div>
+          </div>
+
+          <!-- HTTP template -->
+          <div id="g-http" class="g-tpl hidden">
+            <div class="g-row">
+              <select id="g-http-method" style="flex:1">
+                <option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option>
+              </select>
+              <input type="text" id="g-http-path" placeholder="/admin" style="flex:2">
+            </div>
+            <input type="text" id="g-http-hosthdr" placeholder="Host: interno.empresa.com">
+            <textarea id="g-http-hdrs" placeholder="Headers extra (uno por línea)" rows="2"></textarea>
+            <textarea id="g-http-body" placeholder="Body (POST/PUT)" rows="2"></textarea>
+          </div>
+
+          <!-- SMTP template -->
+          <div id="g-smtp" class="g-tpl hidden">
+            <input type="text" id="g-smtp-from" placeholder="from@attacker.com">
+            <input type="text" id="g-smtp-to" placeholder="victim@internal.com">
+            <input type="text" id="g-smtp-subj" placeholder="Asunto">
+            <textarea id="g-smtp-body" placeholder="Cuerpo del email" rows="2"></textarea>
+          </div>
+
+          <!-- Custom / Raw -->
+          <div id="g-custom" class="g-tpl hidden">
+            <textarea id="g-raw" placeholder="Payload raw (\r\n = CRLF)" rows="4"></textarea>
+          </div>
+
+          <button class="btn-primary btn-full" onclick="buildGopher()">Construir</button>
+
+          <div id="g-output" class="hidden">
+            <div class="g-url-box" onclick="copyText(currentGopherURL)" title="Click para copiar">
+              <span id="g-url"></span>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn-secondary btn-xs" onclick="copyText(currentGopherURL)">📋 URL</button>
+              <button class="btn-secondary btn-xs" onclick="copyDoubleEncoded()">📋 2x enc</button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ── Exportar ────────────────────────────────────────────────── -->
         <section class="panel">
           <h3>Exportar</h3>
           <button class="btn-secondary" onclick="exportJSON()">JSON</button>
@@ -99,24 +188,60 @@
       <!-- Center: interactions feed -->
       <section class="feed-section">
         <div class="feed-header">
-          <h3>Interacciones en tiempo real</h3>
-          <label class="toggle-label">
-            <input type="checkbox" id="auto-scroll" checked> Auto-scroll
-          </label>
+          <h3 id="feed-title">Interacciones en tiempo real</h3>
+          <div class="feed-controls">
+            <button id="notif-btn" class="btn-secondary btn-xs" onclick="toggleNotif()" title="Activar notificaciones">🔕</button>
+            <button id="sound-btn" class="btn-secondary btn-xs" onclick="toggleSound()" title="Activar sonido">🔇</button>
+            <div class="search-wrap">
+              <input type="text" id="search-input" placeholder="Buscar en contenido..." oninput="onSearchInput(this.value)">
+              <button id="clear-search-btn" class="btn-secondary hidden" onclick="clearSearch()">✕</button>
+            </div>
+            <label class="toggle-label">
+              <input type="checkbox" id="auto-scroll" checked> Auto-scroll
+            </label>
+          </div>
         </div>
         <div id="interactions-feed"></div>
       </section>
 
-      <!-- Right: payload output + detail panel -->
+      <!-- Right: historial / payload output / interaction detail -->
       <aside class="detail-panel">
-        <div id="payload-output" class="panel hidden">
-          <h3>Payloads generados <span id="payload-uuid-badge" class="badge"></span></h3>
-          <div id="payload-list"></div>
+
+        <!-- Default view: payload history -->
+        <div id="payload-history-panel" class="panel">
+          <h3>Historial de payloads
+            <button class="btn-secondary btn-xs" onclick="loadAndShowHistory()" style="float:right" title="Actualizar">↺</button>
+          </h3>
+          <div id="history-list"><span class="muted-hint">Sin historial</span></div>
         </div>
 
+        <!-- Generated payloads -->
+        <div id="payload-output" class="panel hidden">
+          <h3>Payloads generados <span id="payload-uuid-badge" class="badge"></span>
+            <button class="btn-secondary btn-xs" onclick="showHistoryPanel()" style="float:right" title="Volver al historial">↩</button>
+            <button class="btn-secondary btn-xs" onclick="exportPayloadsAsTxt()" style="float:right;margin-right:4px" title="Exportar como .txt para Burp Intruder">📄 .txt</button>
+          </h3>
+          <div id="payload-list"></div>
+          <div id="payload-curl-snippet" class="hidden curl-snippet"></div>
+        </div>
+
+        <!-- Interaction detail -->
         <div id="interaction-detail" class="panel hidden">
-          <h3>Detalle <button class="btn-close" onclick="closeDetail()">✕</button></h3>
+          <h3>Detalle
+            <button id="detail-timeline-btn" class="btn-secondary btn-xs hidden" onclick="">⏱ Timeline</button>
+            <button class="btn-close" onclick="closeDetail()">✕</button>
+          </h3>
+          <div id="session-context" class="hidden"></div>
           <pre id="detail-content"></pre>
+        </div>
+
+        <!-- Timeline / correlation view -->
+        <div id="timeline-panel" class="panel hidden">
+          <h3>Timeline <span id="timeline-uuid-badge" class="badge"></span>
+            <button class="btn-close" onclick="closeTimeline()">✕</button>
+          </h3>
+          <div id="timeline-status-bar"></div>
+          <div id="timeline-content"></div>
         </div>
       </aside>
     </div>

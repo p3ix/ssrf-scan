@@ -233,6 +233,24 @@ func parseLDAP(raw string) (uuid, decoded string) {
 	return "", decoded
 }
 
+// parseSMB detects NTLM negotiation messages or raw SMB traffic and hex-dumps them.
+// Port 445 is Windows file sharing — an SSRF hitting it often triggers an NTLM negotiation
+// that leaks NTLMv2 challenge/response hashes useful for cracking or relay attacks.
+func parseSMB(raw string) (uuid, decoded string) {
+	b := []byte(raw)
+	prefix := b
+	if len(prefix) > 64 {
+		prefix = prefix[:64]
+	}
+	// NTLM messages start with the signature "NTLMSSP\x00"
+	if len(b) >= 7 && string(b[:7]) == "NTLMSSP" {
+		decoded = "NTLM negotiation detected — relay/crack candidate | hex: " + hex.EncodeToString(b)
+	} else {
+		decoded = "SMB connection (no NTLM header) | hex: " + hex.EncodeToString(prefix)
+	}
+	return "", decoded
+}
+
 // parseGeneric looks for the first 8-hex-char SSRF-BOX UUID token in any text data.
 func parseGeneric(raw string) (uuid, decoded string) {
 	uuid = extractUUID(raw)
@@ -274,6 +292,8 @@ func main() {
 		{Port: "27017", Protocol: "mongodb", Banner: "", MaxReadBytes: 256, ParseFn: parseGeneric},
 		{Port: "11211", Protocol: "memcached", Banner: "", MaxReadBytes: 256, ParseFn: parseGeneric},
 		{Port: "9200", Protocol: "elasticsearch", Banner: esBanner, MaxReadBytes: 512, ParseFn: parseGeneric},
+		// SMB/NTLM — Windows file sharing port; SSRF here may leak NTLMv2 hashes
+		{Port: "445", Protocol: "smb", Banner: "", MaxReadBytes: 512, ParseFn: parseSMB},
 	}
 
 	for i := range listeners {

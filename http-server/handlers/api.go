@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -178,8 +179,86 @@ func (h *APIHandler) QuickPayloads(domain string) gin.HandlerFunc {
 	}
 }
 
+// Search handles GET /api/search?q=...&limit=...&offset=...
+// Searches across all text fields (path, headers, body, query_name, etc.).
+func (h *APIHandler) Search(c *gin.Context) {
+	q := c.Query("q")
+	if q == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "q parameter required"})
+		return
+	}
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	offset, _ := strconv.Atoi(c.Query("offset"))
+	interactions, err := h.DB.SearchInteractions(q, limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"query":        q,
+		"count":        len(interactions),
+		"interactions": interactions,
+	})
+}
+
+// ListPayloadHistory handles GET /api/payload-history?limit=
+func (h *APIHandler) ListPayloadHistory(c *gin.Context) {
+	limit, _ := strconv.Atoi(c.Query("limit"))
+	entries, err := h.DB.ListPayloadHistory(limit)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"history": entries})
+}
+
+// DeletePayloadHistory handles DELETE /api/payload-history/:id
+func (h *APIHandler) DeletePayloadHistory(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid id"})
+		return
+	}
+	if err := h.DB.DeletePayloadHistoryEntry(id); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"deleted": true})
+}
+
+// CheckUUID handles GET /api/check/:uuid — CLI-friendly hit check.
+// Returns {"uuid":"...", "hit":true/false, "count":N}
+func (h *APIHandler) CheckUUID(c *gin.Context) {
+	uuid := c.Param("uuid")
+	n, err := h.DB.CountInteractionsByUUID(uuid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"uuid": uuid, "hit": n > 0, "count": n})
+}
+
+// SelfTest handles POST /api/selftest — fires a real HTTP probe to the local
+// public receiver so the user can verify the full pipeline without leaving the UI.
+func (h *APIHandler) SelfTest(c *gin.Context) {
+	probe := fmt.Sprintf("selftest-%d", time.Now().UnixMilli()%100000)
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, port := range []string{"80", "3000", "8443", "8888"} {
+		url := fmt.Sprintf("http://127.0.0.1:%s/%s", port, probe)
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		c.JSON(http.StatusOK, gin.H{"ok": true, "uuid": probe, "port": port, "http_status": resp.StatusCode})
+		return
+	}
+	c.JSON(http.StatusBadGateway, gin.H{"ok": false, "error": "receiver not responding on any port (80/3000/8443/8888)"})
+}
+
 // GeneratePayload handles POST /api/generate
 // Body: {"type":"ssrf|rebind|cloud|bypass","params":{...}}
+// Auto-records the generation in payload_history.
 func (h *APIHandler) GeneratePayload(c *gin.Context) {
 	var req struct {
 		Type   string          `json:"type"`
@@ -189,11 +268,22 @@ func (h *APIHandler) GeneratePayload(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	// Delegate to the payload generator
 	result, err := GeneratePayloads(req.Type, req.Params)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
+	}
+	// Record in history async (extract domain from params)
+	{
+		var p map[string]string
+		domain := ""
+		if len(req.Params) > 0 {
+			if json.Unmarshal(req.Params, &p) == nil && p != nil {
+				domain = p["domain"]
+			}
+		}
+		u, t := result.UUID, req.Type
+		go func() { _ = h.DB.InsertPayloadHistory(u, t, domain) }()
 	}
 	c.JSON(http.StatusOK, result)
 }

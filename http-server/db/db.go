@@ -42,6 +42,30 @@ type Stats struct {
 	UniqueUUIDs int            `json:"unique_uuids"`
 }
 
+// PayloadHistoryEntry records every payload generation for audit trail.
+type PayloadHistoryEntry struct {
+	ID        int64     `json:"id"`
+	UUID      string    `json:"uuid"`
+	Type      string    `json:"type"`
+	Domain    string    `json:"domain"`
+	Program   string    `json:"program"`
+	Parameter string    `json:"parameter"`
+	Status    string    `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// UUIDSession stores the Bug Bounty context for a generated UUID.
+type UUIDSession struct {
+	ID        int64     `json:"id"`
+	UUID      string    `json:"uuid"`
+	Program   string    `json:"program"`
+	Parameter string    `json:"parameter"`
+	Endpoint  string    `json:"endpoint"`
+	Notes     string    `json:"notes"`
+	Status    string    `json:"status"` // "confirmed", "false_positive", "investigate", or ""
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // DB wraps an *sql.DB with domain-specific query methods.
 type DB struct {
 	*sql.DB
@@ -105,6 +129,28 @@ func migrate(db *sql.DB) error {
 			active      INTEGER NOT NULL DEFAULT 1,
 			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 		);
+
+		CREATE TABLE IF NOT EXISTS uuid_sessions (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			uuid        TEXT    UNIQUE NOT NULL,
+			program     TEXT    NOT NULL DEFAULT '',
+			parameter   TEXT    NOT NULL DEFAULT '',
+			endpoint    TEXT    NOT NULL DEFAULT '',
+			notes       TEXT    NOT NULL DEFAULT '',
+			created_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_us_uuid    ON uuid_sessions(uuid);
+		CREATE INDEX IF NOT EXISTS idx_us_program ON uuid_sessions(program);
+
+		CREATE TABLE IF NOT EXISTS payload_history (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			uuid       TEXT    NOT NULL,
+			type       TEXT    NOT NULL,
+			domain     TEXT    NOT NULL DEFAULT '',
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_ph_uuid    ON payload_history(uuid);
+		CREATE INDEX IF NOT EXISTS idx_ph_created ON payload_history(created_at DESC);
 	`)
 	if err != nil {
 		return err
@@ -115,6 +161,15 @@ func migrate(db *sql.DB) error {
 	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('rebind_configs') WHERE name='switch_at_time'`).Scan(&colCount)
 	if colCount == 0 {
 		if _, err = db.Exec(`ALTER TABLE rebind_configs ADD COLUMN switch_at_time DATETIME`); err != nil {
+			return err
+		}
+	}
+
+	// Idempotent: add status column to uuid_sessions if it doesn't exist yet.
+	var statusCount int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('uuid_sessions') WHERE name='status'`).Scan(&statusCount)
+	if statusCount == 0 {
+		if _, err = db.Exec(`ALTER TABLE uuid_sessions ADD COLUMN status TEXT NOT NULL DEFAULT ''`); err != nil {
 			return err
 		}
 	}
@@ -265,4 +320,164 @@ func (d *DB) ValidateAPIKey(key string) bool {
 	var n int
 	_ = d.QueryRow("SELECT COUNT(*) FROM api_keys WHERE key_value=? AND active=1", key).Scan(&n)
 	return n > 0
+}
+
+// InsertPayloadHistory records a payload generation event.
+func (d *DB) InsertPayloadHistory(uuid, ptype, domain string) error {
+	_, err := d.Exec(`INSERT INTO payload_history (uuid, type, domain) VALUES (?,?,?)`, uuid, ptype, domain)
+	return err
+}
+
+// ListPayloadHistory returns recent payload history joined with session context.
+func (d *DB) ListPayloadHistory(limit int) ([]PayloadHistoryEntry, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := d.Query(`
+		SELECT ph.id, ph.uuid, ph.type, ph.domain, ph.created_at,
+		       COALESCE(us.program,''), COALESCE(us.parameter,''), COALESCE(us.status,'')
+		FROM payload_history ph
+		LEFT JOIN uuid_sessions us ON ph.uuid = us.uuid
+		ORDER BY ph.created_at DESC LIMIT ?`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []PayloadHistoryEntry{}
+	for rows.Next() {
+		var e PayloadHistoryEntry
+		if err := rows.Scan(&e.ID, &e.UUID, &e.Type, &e.Domain, &e.CreatedAt, &e.Program, &e.Parameter, &e.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+// DeletePayloadHistoryEntry removes a single history entry by ID.
+func (d *DB) DeletePayloadHistoryEntry(id int64) error {
+	_, err := d.Exec(`DELETE FROM payload_history WHERE id = ?`, id)
+	return err
+}
+
+// UpsertSession creates or updates a UUID session (Bug Bounty context).
+func (d *DB) UpsertSession(s *UUIDSession) error {
+	_, err := d.Exec(`
+		INSERT INTO uuid_sessions (uuid, program, parameter, endpoint, notes)
+		VALUES (?,?,?,?,?)
+		ON CONFLICT(uuid) DO UPDATE SET
+			program=excluded.program,
+			parameter=excluded.parameter,
+			endpoint=excluded.endpoint,
+			notes=excluded.notes`,
+		s.UUID, s.Program, s.Parameter, s.Endpoint, s.Notes)
+	return err
+}
+
+// GetSession returns the session for a UUID, or nil if not found.
+func (d *DB) GetSession(uuid string) (*UUIDSession, error) {
+	var s UUIDSession
+	err := d.QueryRow(`
+		SELECT id, uuid, program, parameter, endpoint, notes, COALESCE(status,''), created_at
+		FROM uuid_sessions WHERE uuid = ?`, uuid,
+	).Scan(&s.ID, &s.UUID, &s.Program, &s.Parameter, &s.Endpoint, &s.Notes, &s.Status, &s.CreatedAt)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// ListSessions returns all sessions, optionally filtered by program substring.
+func (d *DB) ListSessions(program string) ([]UUIDSession, error) {
+	query := `SELECT id, uuid, program, parameter, endpoint, notes, COALESCE(status,''), created_at FROM uuid_sessions WHERE 1=1`
+	args := []any{}
+	if program != "" {
+		query += " AND program LIKE ?"
+		args = append(args, "%"+program+"%")
+	}
+	query += " ORDER BY created_at DESC"
+
+	rows, err := d.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []UUIDSession{}
+	for rows.Next() {
+		var s UUIDSession
+		if err := rows.Scan(&s.ID, &s.UUID, &s.Program, &s.Parameter, &s.Endpoint, &s.Notes, &s.Status, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+// UpdateSessionStatus sets the investigation status for a UUID.
+// Upserts a minimal session record if none exists, so status can be set on ad-hoc UUIDs.
+func (d *DB) UpdateSessionStatus(uuid, status string) error {
+	_, err := d.Exec(`
+		INSERT INTO uuid_sessions (uuid, status)
+		VALUES (?, ?)
+		ON CONFLICT(uuid) DO UPDATE SET status=excluded.status`,
+		uuid, status)
+	return err
+}
+
+// DeleteSession removes a session by UUID.
+func (d *DB) DeleteSession(uuid string) error {
+	_, err := d.Exec("DELETE FROM uuid_sessions WHERE uuid = ?", uuid)
+	return err
+}
+
+// CountInteractionsByUUID returns the number of interactions recorded for a UUID.
+func (d *DB) CountInteractionsByUUID(uuid string) (int, error) {
+	var n int
+	err := d.QueryRow("SELECT COUNT(*) FROM interactions WHERE uuid = ?", uuid).Scan(&n)
+	return n, err
+}
+
+// SearchInteractions performs a full-text LIKE search across all text fields.
+func (d *DB) SearchInteractions(query string, limit, offset int) ([]Interaction, error) {
+	if limit <= 0 {
+		limit = 200
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	term := "%" + query + "%"
+	rows, err := d.Query(`
+		SELECT id, uuid, type, timestamp, source_ip,
+			COALESCE(query_name,''), COALESCE(query_type,''),
+			COALESCE(method,''), COALESCE(path,''),
+			COALESCE(headers,''), COALESCE(body,''), COALESCE(user_agent,''),
+			COALESCE(raw_data,''), COALESCE(decoded_data,'')
+		FROM interactions
+		WHERE uuid LIKE ? OR source_ip LIKE ? OR path LIKE ? OR query_name LIKE ?
+		   OR user_agent LIKE ? OR headers LIKE ? OR body LIKE ?
+		   OR raw_data LIKE ? OR decoded_data LIKE ?
+		ORDER BY timestamp DESC LIMIT ? OFFSET ?`,
+		term, term, term, term, term, term, term, term, term, limit, offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := []Interaction{}
+	for rows.Next() {
+		var i Interaction
+		if err := rows.Scan(&i.ID, &i.UUID, &i.Type, &i.Timestamp, &i.SourceIP,
+			&i.QueryName, &i.QueryType, &i.Method, &i.Path,
+			&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
+	}
+	return out, rows.Err()
 }

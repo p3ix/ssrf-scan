@@ -24,10 +24,8 @@ type PayloadEntry struct {
 }
 
 // GeneratePayloads is the main dispatch for payload generation.
+// Accepts an optional "uuid" field in params to reuse a specific session UUID.
 func GeneratePayloads(ptype string, rawParams json.RawMessage) (*PayloadResult, error) {
-	id := uuid.New().String()[:8]
-	result := &PayloadResult{UUID: id, Type: ptype}
-
 	var params map[string]string
 	if len(rawParams) > 0 {
 		_ = json.Unmarshal(rawParams, &params)
@@ -35,6 +33,12 @@ func GeneratePayloads(ptype string, rawParams json.RawMessage) (*PayloadResult, 
 	if params == nil {
 		params = map[string]string{}
 	}
+
+	id := params["uuid"]
+	if id == "" {
+		id = uuid.New().String()[:8]
+	}
+	result := &PayloadResult{UUID: id, Type: ptype}
 
 	domain := params["domain"]
 	if domain == "" {
