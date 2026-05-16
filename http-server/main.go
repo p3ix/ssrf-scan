@@ -106,9 +106,9 @@ func main() {
 		apiGroup.GET("/check/:uuid", apiHandler.CheckUUID)
 		apiGroup.POST("/selftest", apiHandler.SelfTest)
 		apiGroup.DELETE("/interaction/:id", apiHandler.DeleteInteractionByID)
-		apiGroup.POST("/interactions/:id/tags", apiHandler.AddTag)
-		apiGroup.DELETE("/interactions/:id/tags", apiHandler.RemoveTag)
-		apiGroup.POST("/interactions/:id/replay", apiHandler.ReplayInteraction)
+		apiGroup.POST("/interaction/:id/tags", apiHandler.AddTag)
+		apiGroup.DELETE("/interaction/:id/tags", apiHandler.RemoveTag)
+		apiGroup.POST("/interaction/:id/replay", apiHandler.ReplayInteraction)
 		apiGroup.POST("/chain/imdsv2/step1", apiHandler.IMDSv2Step1)
 
 		sessionHandler := &handlers.SessionHandler{DB: database}

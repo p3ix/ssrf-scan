@@ -1163,7 +1163,7 @@ async function addTag() {
   const tag = input.value.trim();
   if (!tag) return;
   try {
-    const resp = await apiFetch(`/api/interactions/${currentDetailInteraction.id}/tags`, {
+    const resp = await apiFetch(`/api/interaction/${currentDetailInteraction.id}/tags`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag }),
@@ -1181,7 +1181,7 @@ async function addTag() {
 
 async function removeTag(iid, tag) {
   try {
-    const resp = await apiFetch(`/api/interactions/${iid}/tags`, {
+    const resp = await apiFetch(`/api/interaction/${iid}/tags`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tag }),
@@ -1226,7 +1226,7 @@ async function replayInteraction() {
   btn.disabled = true;
   btn.textContent = '⟳ Replaying...';
   try {
-    const resp = await apiFetch(`/api/interactions/${currentDetailInteraction.id}/replay`, {
+    const resp = await apiFetch(`/api/interaction/${currentDetailInteraction.id}/replay`, {
       method: 'POST',
     });
     const data = await resp.json();
