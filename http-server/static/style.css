@@ -203,7 +203,7 @@ button:hover { opacity: 0.85; }
   cursor: pointer;
   transition: border-color 0.1s;
   display: grid;
-  grid-template-columns: 60px 45px 1fr auto auto auto;
+  grid-template-columns: 60px 100px 1fr auto auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -228,7 +228,7 @@ button:hover { opacity: 0.85; }
 .badge-type.ldap { background: #2a1a3a; color: var(--purple); }
 .badge-type.smtps,.badge-type.ldaps { background: #2a2a1a; color: var(--yellow); }
 
-.interaction-ip { color: var(--text-muted); font-size: 11px; }
+.interaction-ip { color: var(--text-muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .interaction-path { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .interaction-time { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
 .interaction-decoded { color: var(--yellow); font-size: 11px; grid-column: 1 / -1; margin-top: 2px; }
