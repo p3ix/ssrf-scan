@@ -76,6 +76,8 @@ session management, gopher payload builder, DNS rebinding, and listeners for 10+
 | **Program badges** | Deterministic color per program shown inline in every feed row |
 | **Status marking** | Mark any UUID as `Confirmed / Investigate / False Positive` — persisted in DB |
 | **UUID timeline** | Per-UUID correlation view with delta times (`+0.0s`, `+2.1s`) and gap indicators |
+| **Interaction tags** | Free-form labels on any hit (e.g., `"sent 14:32"`, `"via redirect"`) — persisted in DB |
+| **HTTP replay** | Re-fire any captured HTTP request to the receiver in one click — confirms reproducibility |
 | **Payload history** | Every `POST /api/generate` call logged — regenerate or open timeline directly |
 | **Payload .txt export** | Export current payload set as one-per-line `.txt` for Burp Intruder paste |
 | **Session filter** | Filter feed by program name or UUID |
@@ -91,6 +93,7 @@ session management, gopher payload builder, DNS rebinding, and listeners for 10+
 | **Header injection** | XFF, X-Original-URL, X-Rewrite-URL, Referer, Host, X-Forwarded-Host |
 | **DNS exfiltration** | Command injection templates for `whoami`, `id`, `hostname`, `/etc/passwd` chunks |
 | **Gopher builder** | Interactive: Redis RESP (FLUSHALL, SET, webshell, SLAVEOF), HTTP internal, SMTP, raw |
+| **IMDSv2 chain builder** | Two-step AWS IMDSv2 builder — runs Step 1 against SSRF-BOX, auto-fills token into Step 2 curls |
 
 ### Ops
 | Feature | Detail |
@@ -99,6 +102,7 @@ session management, gopher payload builder, DNS rebinding, and listeners for 10+
 | **CLI check** | `GET /api/check/:uuid` → `{"hit":true,"count":3}` — designed for `watch -n1 curl …` loops |
 | **Notifications** | Discord, Telegram, Slack webhooks on every new interaction |
 | **3-container deploy** | dns-server, http-server, smtp-ldap — all via `docker compose up -d` |
+| **Docker healthcheck** | http-server exposes `/ping`; smtp-ldap/dns-server wait for it before starting |
 
 ---
 
@@ -303,6 +307,39 @@ Open via: **⏱ Timeline** button in a session card, history item, or interactio
 - Time gaps ≥5s are marked inline — useful to confirm DNS rebinding timing
 - Click any event to open its full detail
 - Status selector at the top — changes are saved immediately
+
+### Interaction Tags
+
+Open any interaction detail, then add free-form labels in the **Tags** section:
+
+- Type a label and press **Enter** or click **+** (e.g., `"triggered at 14:32"`, `"via open redirect"`, `"step-2 only"`)
+- Tags are stored in the DB and survive page reloads
+- Click **×** on any chip to remove it
+- Tags appear in the JSON detail view and are included in exports
+
+### HTTP Replay
+
+Available on **HTTP** interactions only. Click **↺ Replay** in the detail panel header.
+
+The server re-sends the same `METHOD /path` (with original headers, minus hop-by-hop ones) to the local SSRF receiver on port 80. A toast shows `HTTP 200 in 8ms` on success or the error message on failure. The replay is logged as a new interaction in the feed — confirming the endpoint is still live and detectable.
+
+> Replay fires internally — it does not contact the original source. It verifies your receiver works, not that the SSRF target still fires.
+
+### IMDSv2 Chain Builder
+
+The sidebar **Chain Builder** panel generates both steps of the AWS IMDSv2 flow with live curl previews:
+
+1. **Step 1** — PUT to get the token:
+   ```bash
+   curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+     -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"
+   ```
+   Click **▶ Run vs SSRF-BOX** to fire Step 1 against the local SSRF-BOX server (which simulates IMDS). The returned token auto-fills into Step 2.
+
+2. **Step 2a** — list IAM roles (uses the captured token)
+3. **Step 2b** — fetch credentials for a specific role
+
+All curls update live as you change the target IP, TTL, token, or role name.
 
 ### Self-test
 
@@ -521,6 +558,9 @@ Base URL: `http://YOUR_VPS_IP:8080`
 | `GET` | `/api/interactions` | List interactions (`?uuid=&type=&limit=&offset=`) |
 | `GET` | `/api/interactions/:uuid` | All interactions for a UUID |
 | `DELETE` | `/api/interactions/:uuid` | Delete all interactions for a UUID |
+| `POST` | `/api/interactions/:id/tags` | Add a tag `{"tag":"..."}` — returns updated `{"tags":[...]}` |
+| `DELETE` | `/api/interactions/:id/tags` | Remove a tag `{"tag":"..."}` — returns updated `{"tags":[...]}` |
+| `POST` | `/api/interactions/:id/replay` | Re-fire the HTTP request to local receiver — returns `{"ok":bool,"status":200,"ms":8}` |
 | `GET` | `/api/check/:uuid` | `{"hit":bool,"count":N}` — CLI-friendly |
 | `GET` | `/api/search?q=` | Full-text search across all fields |
 | `GET` | `/api/export` | CSV export (`?uuid=&type=`) |
@@ -562,12 +602,19 @@ Base URL: `http://YOUR_VPS_IP:8080`
 }
 ```
 
-### Ops
+### Ops & Chains
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/selftest` | Fire a self-probe and return `{"ok":true,"uuid":"...","port":"80"}` |
+| `POST` | `/api/selftest` | Fire a self-probe — returns `{"ok":true,"uuid":"...","port":"80"}` |
+| `POST` | `/api/chain/imdsv2/step1` | PUT token request to target — returns `{"ok":true,"token":"...","ms":N}` |
 | `GET` | `/ws` | WebSocket feed (pass API key as `Sec-WebSocket-Protocol` header) |
+
+**IMDSv2 Step 1 body:**
+```json
+{"target": "169.254.169.254", "ttl": 21600}
+```
+Defaults: `target=127.0.0.1`, `ttl=21600`. Point at your own server to test the simulated IMDS flow.
 
 ### Generate payload types
 
@@ -631,6 +678,7 @@ SLACK_WEBHOOK=https://hooks.slack.com/services/T.../B.../...
 | `TELEGRAM_BOT_TOKEN` | — | Telegram bot token |
 | `TELEGRAM_CHAT_ID` | — | Telegram chat/channel ID |
 | `SLACK_WEBHOOK` | — | Slack incoming webhook URL |
+| `RATE_LIMIT_RPM` | — | Max HTTP requests per minute per IP on the public receiver (default: `50`, set `0` to disable) |
 
 ---
 

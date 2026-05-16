@@ -54,8 +54,15 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID:  ${TELEGRAM_CHAT_ID:-}
       SLACK_WEBHOOK:     ${SLACK_WEBHOOK:-}
+      RATE_LIMIT_RPM:    ${RATE_LIMIT_RPM:-50}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:80/ping"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     volumes:
-      - db-data:/data
+      - ./data:/data
       - tls-certs:/certs:ro
     restart: unless-stopped
     networks:
@@ -89,12 +96,14 @@ services:
     networks:
       - ssrf-net
     depends_on:
-      - http-server
+      http-server:
+        condition: service_healthy
     logging: *logging
 
 volumes:
-  db-data:
-    driver: local
+  # tls-certs is a named volume; ./data is a bind-mount for easy backup (rsync/cp ./data/).
+  # Existing installs using the old named volume 'db-data': copy with:
+  #   docker run --rm -v ssrf-scan_db-data:/from -v $(pwd)/data:/to alpine cp -a /from/. /to/
   tls-certs:
     driver: local
 

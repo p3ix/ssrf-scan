@@ -19,6 +19,12 @@ type MetadataHandler struct {
 }
 
 // RegisterRoutes mounts all metadata simulation routes on the given router group.
+//
+// NOTE: do NOT add a /*path catch-all here. Gin's radix tree panics if a
+// wildcard catch-all shares a prefix with already-registered named segments
+// (e.g. "/*path" conflicts with "/latest/..." already in the tree).
+// Unknown paths under this group fall through to the public router's NoRoute
+// handler (the SSRF interaction logger), which records them correctly.
 func (h *MetadataHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	// AWS IMDSv1
 	rg.Any("/latest/meta-data/*path", h.awsMetadata)
@@ -30,8 +36,6 @@ func (h *MetadataHandler) RegisterRoutes(rg *gin.RouterGroup) {
 	rg.Any("/metadata/*path", h.azureMetadata)
 	// Alibaba Cloud (ECS metadata service at 100.100.100.200)
 	rg.Any("/2016-01-01/*path", h.alibabaMetadata)
-	// Generic catch-all under /metadata/
-	rg.Any("/*path", h.genericMetadata)
 }
 
 func (h *MetadataHandler) logAndNotify(c *gin.Context, cloud, detail string) {

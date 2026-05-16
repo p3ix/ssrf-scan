@@ -2,6 +2,8 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -23,6 +25,7 @@ type Interaction struct {
 	UserAgent   string    `json:"user_agent,omitempty"`
 	RawData     string    `json:"raw_data,omitempty"`
 	DecodedData string    `json:"decoded_data,omitempty"`
+	Tags        []string  `json:"tags"`
 }
 
 // RebindConfig holds DNS rebinding configuration for a specific UUID.
@@ -173,6 +176,15 @@ func migrate(db *sql.DB) error {
 			return err
 		}
 	}
+
+	// Idempotent: add tags column to interactions if it doesn't exist yet.
+	var tagsCount int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('interactions') WHERE name='tags'`).Scan(&tagsCount)
+	if tagsCount == 0 {
+		if _, err = db.Exec(`ALTER TABLE interactions ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'`); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -192,9 +204,9 @@ func (d *DB) InsertInteraction(i *Interaction) (int64, error) {
 	return res.LastInsertId()
 }
 
-// ListInteractions returns interactions filtered by UUID and/or type with pagination.
+// ListInteractions returns interactions filtered by UUID, type, and/or tag with pagination.
 // Pass empty strings to skip filters. limit=0 defaults to 200.
-func (d *DB) ListInteractions(uuid, itype string, limit, offset int) ([]Interaction, error) {
+func (d *DB) ListInteractions(uuid, itype, tag string, limit, offset int) ([]Interaction, error) {
 	if limit <= 0 {
 		limit = 200
 	}
@@ -205,7 +217,7 @@ func (d *DB) ListInteractions(uuid, itype string, limit, offset int) ([]Interact
 		COALESCE(query_name,''), COALESCE(query_type,''),
 		COALESCE(method,''), COALESCE(path,''),
 		COALESCE(headers,''), COALESCE(body,''), COALESCE(user_agent,''),
-		COALESCE(raw_data,''), COALESCE(decoded_data,'')
+		COALESCE(raw_data,''), COALESCE(decoded_data,''), COALESCE(tags,'[]')
 		FROM interactions WHERE 1=1`
 	args := []any{}
 	if uuid != "" {
@@ -215,6 +227,11 @@ func (d *DB) ListInteractions(uuid, itype string, limit, offset int) ([]Interact
 	if itype != "" {
 		query += " AND type = ?"
 		args = append(args, itype)
+	}
+	if tag != "" {
+		// JSON array stored as text; search for the exact quoted tag string.
+		query += ` AND instr(tags, ?) > 0`
+		args = append(args, `"`+tag+`"`)
 	}
 	query += " ORDER BY timestamp DESC LIMIT ? OFFSET ?"
 	args = append(args, limit, offset)
@@ -228,11 +245,16 @@ func (d *DB) ListInteractions(uuid, itype string, limit, offset int) ([]Interact
 	var out []Interaction
 	for rows.Next() {
 		var i Interaction
+		var tagsJSON string
 		if err := rows.Scan(&i.ID, &i.UUID, &i.Type, &i.Timestamp, &i.SourceIP,
 			&i.QueryName, &i.QueryType, &i.Method, &i.Path,
-			&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData,
+			&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData, &tagsJSON,
 		); err != nil {
 			return nil, err
+		}
+		json.Unmarshal([]byte(tagsJSON), &i.Tags)
+		if i.Tags == nil {
+			i.Tags = []string{}
 		}
 		out = append(out, i)
 	}
@@ -435,6 +457,12 @@ func (d *DB) DeleteSession(uuid string) error {
 	return err
 }
 
+// DeleteInteractionByID removes a single interaction by its primary key.
+func (d *DB) DeleteInteractionByID(id int64) error {
+	_, err := d.Exec("DELETE FROM interactions WHERE id = ?", id)
+	return err
+}
+
 // CountInteractionsByUUID returns the number of interactions recorded for a UUID.
 func (d *DB) CountInteractionsByUUID(uuid string) (int, error) {
 	var n int
@@ -456,7 +484,7 @@ func (d *DB) SearchInteractions(query string, limit, offset int) ([]Interaction,
 			COALESCE(query_name,''), COALESCE(query_type,''),
 			COALESCE(method,''), COALESCE(path,''),
 			COALESCE(headers,''), COALESCE(body,''), COALESCE(user_agent,''),
-			COALESCE(raw_data,''), COALESCE(decoded_data,'')
+			COALESCE(raw_data,''), COALESCE(decoded_data,''), COALESCE(tags,'[]')
 		FROM interactions
 		WHERE uuid LIKE ? OR source_ip LIKE ? OR path LIKE ? OR query_name LIKE ?
 		   OR user_agent LIKE ? OR headers LIKE ? OR body LIKE ?
@@ -471,13 +499,87 @@ func (d *DB) SearchInteractions(query string, limit, offset int) ([]Interaction,
 	out := []Interaction{}
 	for rows.Next() {
 		var i Interaction
+		var tagsJSON string
 		if err := rows.Scan(&i.ID, &i.UUID, &i.Type, &i.Timestamp, &i.SourceIP,
 			&i.QueryName, &i.QueryType, &i.Method, &i.Path,
-			&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData,
+			&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData, &tagsJSON,
 		); err != nil {
 			return nil, err
+		}
+		json.Unmarshal([]byte(tagsJSON), &i.Tags)
+		if i.Tags == nil {
+			i.Tags = []string{}
 		}
 		out = append(out, i)
 	}
 	return out, rows.Err()
+}
+
+// GetInteractionByID returns a single interaction by its primary key.
+func (d *DB) GetInteractionByID(id int64) (*Interaction, error) {
+	var i Interaction
+	var tagsJSON string
+	err := d.QueryRow(`
+		SELECT id,uuid,type,timestamp,source_ip,
+			COALESCE(query_name,''), COALESCE(query_type,''),
+			COALESCE(method,''), COALESCE(path,''),
+			COALESCE(headers,''), COALESCE(body,''), COALESCE(user_agent,''),
+			COALESCE(raw_data,''), COALESCE(decoded_data,''), COALESCE(tags,'[]')
+		FROM interactions WHERE id=?`, id,
+	).Scan(&i.ID, &i.UUID, &i.Type, &i.Timestamp, &i.SourceIP,
+		&i.QueryName, &i.QueryType, &i.Method, &i.Path,
+		&i.Headers, &i.Body, &i.UserAgent, &i.RawData, &i.DecodedData, &tagsJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	json.Unmarshal([]byte(tagsJSON), &i.Tags)
+	if i.Tags == nil {
+		i.Tags = []string{}
+	}
+	return &i, nil
+}
+
+// AddInteractionTag appends a tag to an interaction (no-op if already present).
+// Returns the updated tag list.
+func (d *DB) AddInteractionTag(id int64, tag string) ([]string, error) {
+	var raw string
+	if err := d.QueryRow("SELECT COALESCE(tags,'[]') FROM interactions WHERE id=?", id).Scan(&raw); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("interaction %d not found", id)
+		}
+		return nil, err
+	}
+	var tags []string
+	json.Unmarshal([]byte(raw), &tags)
+	for _, t := range tags {
+		if t == tag {
+			return tags, nil
+		}
+	}
+	tags = append(tags, tag)
+	data, _ := json.Marshal(tags)
+	_, err := d.Exec("UPDATE interactions SET tags=? WHERE id=?", string(data), id)
+	return tags, err
+}
+
+// RemoveInteractionTag removes a tag from an interaction. Returns the updated list.
+func (d *DB) RemoveInteractionTag(id int64, tag string) ([]string, error) {
+	var raw string
+	if err := d.QueryRow("SELECT COALESCE(tags,'[]') FROM interactions WHERE id=?", id).Scan(&raw); err != nil {
+		return nil, err
+	}
+	var tags []string
+	json.Unmarshal([]byte(raw), &tags)
+	filtered := make([]string, 0, len(tags))
+	for _, t := range tags {
+		if t != tag {
+			filtered = append(filtered, t)
+		}
+	}
+	data, _ := json.Marshal(filtered)
+	_, err := d.Exec("UPDATE interactions SET tags=? WHERE id=?", string(data), id)
+	return filtered, err
 }

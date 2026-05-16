@@ -70,6 +70,7 @@
           <h3>Filtros</h3>
           <input type="text" id="filter-program" placeholder="Programa" oninput="applyFilters()">
           <input type="text" id="filter-uuid" placeholder="UUID" oninput="applyFilters()">
+          <input type="text" id="filter-tag" placeholder="Tag" oninput="onTagFilterInput(this.value)">
           <select id="filter-type" onchange="applyFilters()">
             <option value="">Todos los tipos</option>
             <option value="dns">DNS</option>
@@ -177,6 +178,69 @@
           </div>
         </section>
 
+        <!-- ── Chain Builder — IMDSv2 ─────────────────────────────────── -->
+        <section class="panel">
+          <h3>Chain Builder <span class="badge" style="background:#f85149;color:#fff">IMDSv2</span></h3>
+
+          <!-- Rebinding mode toggle -->
+          <label class="chain-rebind-toggle">
+            <input type="checkbox" id="chain-rebind-enable" onchange="toggleChainRebind()">
+            Usar DNS Rebinding
+          </label>
+
+          <!-- Direct target (shown when rebinding OFF) -->
+          <div id="chain-direct-fields" class="g-row">
+            <input type="text" id="chain-target" placeholder="169.254.169.254" oninput="updateChainCurls()" style="flex:2">
+            <input type="text" id="chain-ttl" value="21600" oninput="updateChainCurls()" style="flex:1" title="TTL en segundos">
+          </div>
+
+          <!-- Rebinding fields (shown when rebinding ON) -->
+          <div id="chain-rebind-fields" class="hidden">
+            <div class="g-row">
+              <input type="text" id="chain-rebind-uuid" placeholder="UUID del payload" oninput="updateChainCurls()" style="flex:2">
+              <input type="text" id="chain-rebind-public-ip" placeholder="IP del VPS" oninput="updateChainCurls()" style="flex:2">
+              <input type="text" id="chain-rebind-switch" value="1" oninput="updateChainCurls()" style="flex:1" title="Cambiar IP después de N requests">
+            </div>
+            <button class="btn-secondary btn-full" id="chain-rebind-setup-btn" onclick="setupChainRebind()">⚙ Configurar Rebinding</button>
+            <div class="chain-label" style="margin-top:4px">Private IP (fija): 169.254.169.254 → IMDS</div>
+          </div>
+
+          <div class="chain-step">
+            <div class="chain-step-header">
+              <span class="chain-step-num">1</span>
+              <span>PUT — obtener token IMDSv2</span>
+            </div>
+            <pre id="chain-curl-1" class="chain-curl"></pre>
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <button class="btn-secondary btn-xs" onclick="copyText(document.getElementById('chain-curl-1').textContent)">📋 Copiar</button>
+              <button class="btn-primary btn-xs" id="chain-run-btn" onclick="runChainStep1()">▶ Run vs SSRF-BOX</button>
+            </div>
+            <div id="chain-token-result" class="hidden" style="margin-top:6px">
+              <label class="chain-label">Token capturado:</label>
+              <input type="text" id="chain-token" placeholder="(auto-filled o pega aquí)" oninput="updateChainCurls()" style="font-size:10px;font-family:monospace">
+            </div>
+          </div>
+
+          <div class="chain-step">
+            <div class="chain-step-header">
+              <span class="chain-step-num">2a</span>
+              <span>GET — listar roles IAM</span>
+            </div>
+            <pre id="chain-curl-2a" class="chain-curl"></pre>
+            <button class="btn-secondary btn-xs" onclick="copyText(document.getElementById('chain-curl-2a').textContent)">📋 Copiar</button>
+          </div>
+
+          <div class="chain-step">
+            <div class="chain-step-header">
+              <span class="chain-step-num">2b</span>
+              <span>GET — credenciales del rol</span>
+            </div>
+            <input type="text" id="chain-role" placeholder="ssrf-box-role" oninput="updateChainCurls()" style="margin:4px 0">
+            <pre id="chain-curl-2b" class="chain-curl"></pre>
+            <button class="btn-secondary btn-xs" onclick="copyText(document.getElementById('chain-curl-2b').textContent)">📋 Copiar</button>
+          </div>
+        </section>
+
         <!-- ── Exportar ────────────────────────────────────────────────── -->
         <section class="panel">
           <h3>Exportar</h3>
@@ -202,6 +266,9 @@
           </div>
         </div>
         <div id="interactions-feed"></div>
+        <div class="load-more-wrap">
+          <button id="load-more-btn" class="btn-secondary hidden" onclick="loadMoreInteractions()">Cargar más</button>
+        </div>
       </section>
 
       <!-- Right: historial / payload output / interaction detail -->
@@ -228,10 +295,20 @@
         <!-- Interaction detail -->
         <div id="interaction-detail" class="panel hidden">
           <h3>Detalle
+            <button id="detail-replay-btn" class="btn-secondary btn-xs hidden" onclick="replayInteraction()">↺ Replay</button>
             <button id="detail-timeline-btn" class="btn-secondary btn-xs hidden" onclick="">⏱ Timeline</button>
+            <button id="detail-delete-btn" class="btn-danger btn-xs hidden" onclick="deleteCurrentInteraction()">🗑</button>
             <button class="btn-close" onclick="closeDetail()">✕</button>
           </h3>
           <div id="session-context" class="hidden"></div>
+          <div id="interaction-tags" class="hidden">
+            <div id="tags-list"></div>
+            <div class="tag-input-row">
+              <input type="text" id="tag-input" placeholder="Añadir etiqueta..." maxlength="120"
+                     onkeydown="if(event.key==='Enter')addTag()">
+              <button class="btn-secondary btn-xs" onclick="addTag()">+</button>
+            </div>
+          </div>
           <pre id="detail-content"></pre>
         </div>
 

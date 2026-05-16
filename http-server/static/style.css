@@ -203,7 +203,7 @@ button:hover { opacity: 0.85; }
   cursor: pointer;
   transition: border-color 0.1s;
   display: grid;
-  grid-template-columns: 60px 45px 1fr auto auto;
+  grid-template-columns: 60px 45px 1fr auto auto auto;
   gap: 8px;
   align-items: center;
 }
@@ -753,3 +753,121 @@ textarea:focus { outline: none; border-color: var(--accent); }
   overflow-y: auto;
 }
 .g-url-box:hover { border-color: var(--accent); }
+
+/* ── Load more button ─────────────────────────────────────────────────────── */
+.load-more-wrap {
+  text-align: center;
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+}
+.load-more-wrap .btn-secondary { min-width: 120px; }
+
+/* ── Row delete button ────────────────────────────────────────────────────── */
+.btn-row-delete {
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.interaction-row:hover .btn-row-delete { opacity: 1; }
+.btn-row-delete:hover { color: var(--red); background: rgba(248,81,73,0.1); }
+
+/* ── Chain rebind toggle ──────────────────────────────────────────────────── */
+.chain-rebind-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  margin: 4px 0 6px;
+}
+.chain-rebind-toggle input { cursor: pointer; }
+
+/* ── Interaction tags ─────────────────────────────────────────────────────── */
+#interaction-tags {
+  padding: 6px 0 8px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: #1c2a3a;
+  border: 1px solid #2d4a6a;
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 2px 5px 2px 7px;
+  font-size: 11px;
+  font-family: 'Courier New', monospace;
+  margin: 2px 2px 2px 0;
+  cursor: default;
+}
+.tag-chip button {
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0 1px;
+  font-size: 13px;
+  line-height: 1;
+}
+.tag-chip button:hover { color: var(--red); }
+.tag-input-row {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+}
+.tag-input-row input { flex: 1; font-size: 11px; }
+
+/* ── IMDSv2 Chain Builder ─────────────────────────────────────────────────── */
+.chain-step {
+  background: var(--bg-base);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+  margin: 6px 0;
+}
+.chain-step-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.chain-step-num {
+  background: #1a3a5c;
+  color: var(--accent);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-size: 10px;
+  font-weight: bold;
+  font-family: 'Courier New', monospace;
+}
+.chain-curl {
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 6px 8px;
+  font-size: 10px;
+  color: var(--green);
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin: 4px 0;
+  font-family: 'Courier New', monospace;
+  line-height: 1.5;
+}
+.chain-label {
+  font-size: 10px;
+  color: var(--muted);
+  display: block;
+  margin-top: 4px;
+  margin-bottom: 2px;
+}

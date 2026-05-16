@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -48,7 +49,9 @@ func main() {
 	public := gin.New()
 	public.Use(gin.Recovery())
 	public.Use(requestLogger())
-	public.Use(rateLimitMiddleware(newIPRateLimiter(), 50, time.Minute))
+	if rpm := getEnvInt("RATE_LIMIT_RPM", 50); rpm > 0 {
+		public.Use(rateLimitMiddleware(newIPRateLimiter(), rpm, time.Minute))
+	}
 
 	public.GET("/ping", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"status": "ok"}) })
 
@@ -102,6 +105,11 @@ func main() {
 		apiGroup.DELETE("/payload-history/:id", apiHandler.DeletePayloadHistory)
 		apiGroup.GET("/check/:uuid", apiHandler.CheckUUID)
 		apiGroup.POST("/selftest", apiHandler.SelfTest)
+		apiGroup.DELETE("/interaction/:id", apiHandler.DeleteInteractionByID)
+		apiGroup.POST("/interactions/:id/tags", apiHandler.AddTag)
+		apiGroup.DELETE("/interactions/:id/tags", apiHandler.RemoveTag)
+		apiGroup.POST("/interactions/:id/replay", apiHandler.ReplayInteraction)
+		apiGroup.POST("/chain/imdsv2/step1", apiHandler.IMDSv2Step1)
 
 		sessionHandler := &handlers.SessionHandler{DB: database}
 		apiGroup.POST("/sessions", sessionHandler.Create)
@@ -237,6 +245,15 @@ func requestLogger() gin.HandlerFunc {
 func getEnv(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return def
+}
+
+func getEnvInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
 	return def
 }
