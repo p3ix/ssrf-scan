@@ -455,6 +455,13 @@ function renderFeed() {
   document.getElementById('total-count').textContent = feedOffset + ' interacciones';
 }
 
+function sanitizePath(raw) {
+  if (!raw || raw === '—') return '—';
+  // Strip non-printable ASCII (binary protocol data) keeping printable chars only
+  const clean = raw.replace(/[^\x20-\x7E]/g, '').trim();
+  return clean || '—';
+}
+
 function buildRow(i, isNew) {
   const row = document.createElement('div');
   row.className = 'interaction-row' + (isNew ? ' new' : '');
@@ -462,7 +469,8 @@ function buildRow(i, isNew) {
   row.onclick = () => showDetail(i);
 
   const typeDisplay = i.type || 'http';
-  const path = i.path || i.query_name || i.raw_data || '—';
+  const rawPath = i.path || i.query_name || i.raw_data || '—';
+  const path = sanitizePath(rawPath);
   const tsMs = new Date(i.timestamp).getTime();
   const exactTime = new Date(i.timestamp).toLocaleTimeString('es', { hour12: false });
   const relTime = relativeTime(new Date(i.timestamp));
@@ -476,7 +484,7 @@ function buildRow(i, isNew) {
 
   row.innerHTML = `
     <span class="badge-type ${typeDisplay}">${typeDisplay.toUpperCase()}</span>
-    <span class="interaction-ip">${truncate(i.source_ip || '—', 14)}</span>
+    <span class="interaction-ip">${escHtml(i.source_ip || '—')}</span>
     <span class="interaction-path" title="${escHtml(path)}">${programBadge}${escHtml(truncate(path, session ? 48 : 60))}</span>
     <span class="interaction-time" data-ts="${tsMs}" title="${exactTime}">${relTime}</span>
     <button class="btn-uuid-copy" onclick="event.stopPropagation();copyText('${escHtml(i.uuid)}')" title="Copiar UUID: ${escHtml(i.uuid)}">📋</button>
