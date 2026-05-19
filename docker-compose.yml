@@ -16,6 +16,7 @@ services:
       HTTP_SERVER_URL:   http://http-server:8080
       INTERNAL_API_KEY:  ${INTERNAL_API_KEY}
       DNS_PORT:          "53"
+      ACME_TXT:          ${ACME_TXT:-}
     restart: unless-stopped
     networks:
       - ssrf-net
@@ -64,6 +65,7 @@ services:
     volumes:
       - ./data:/data
       - tls-certs:/certs:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     restart: unless-stopped
     networks:
       - ssrf-net

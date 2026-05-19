@@ -24,6 +24,7 @@ type Config struct {
 	HTTPServerURL   string
 	InternalAPIKey  string
 	Port            string
+	ACMETxt         []string // static TXT values for _acme-challenge.<domain>
 }
 
 // DNSServer handles all incoming DNS queries.
@@ -113,10 +114,21 @@ func (s *DNSServer) ServeDNS(w dns.ResponseWriter, r *dns.Msg) {
 			})
 
 		case dns.TypeTXT:
-			m.Answer = append(m.Answer, &dns.TXT{
-				Hdr: dns.RR_Header{Name: qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 1},
-				Txt: []string{"ssrf-box interaction logged: " + time.Now().Format(time.RFC3339)},
-			})
+			acmeLabel := "_acme-challenge." + strings.ToLower(s.config.Domain) + "."
+			if len(s.config.ACMETxt) > 0 && strings.ToLower(qname) == acmeLabel {
+				// Serve static ACME challenge values (one RR per value)
+				for _, v := range s.config.ACMETxt {
+					m.Answer = append(m.Answer, &dns.TXT{
+						Hdr: dns.RR_Header{Name: qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 60},
+						Txt: []string{v},
+					})
+				}
+			} else {
+				m.Answer = append(m.Answer, &dns.TXT{
+					Hdr: dns.RR_Header{Name: qname, Rrtype: dns.TypeTXT, Class: dns.ClassINET, Ttl: 1},
+					Txt: []string{"ssrf-box interaction logged: " + time.Now().Format(time.RFC3339)},
+				})
+			}
 		}
 	}
 
@@ -229,12 +241,22 @@ func getEnv(key, def string) string {
 }
 
 func main() {
+	var acmeTxt []string
+	if v := os.Getenv("ACME_TXT"); v != "" {
+		for _, s := range strings.Split(v, ",") {
+			if t := strings.TrimSpace(s); t != "" {
+				acmeTxt = append(acmeTxt, t)
+			}
+		}
+	}
+
 	cfg := Config{
 		Domain:         getEnv("SSRF_DOMAIN", "oob.example.com"),
 		PublicIP:       getEnv("VPS_IP", "1.2.3.4"),
 		HTTPServerURL:  getEnv("HTTP_SERVER_URL", "http://http-server:8080"),
 		InternalAPIKey: getEnv("INTERNAL_API_KEY", "changeme-internal"),
 		Port:           getEnv("DNS_PORT", "53"),
+		ACMETxt:        acmeTxt,
 	}
 
 	rb := NewRebinder(cfg.HTTPServerURL, cfg.InternalAPIKey)
